@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply min-h-screen bg-white text-neutral-800 antialiased;
+    font-size: 15px;
+    line-height: 1.6;
+    font-feature-settings: "kern" 1, "liga" 1;
+  }
+
+  @media (min-width: 768px) {
+    body {
+      font-size: 16px;
+      line-height: 1.65;
+    }
+  }
+}
+
+@layer components {
+  /* Page titles — dashboard & inner pages */
+  .page-heading {
+    @apply text-2xl font-semibold tracking-tight text-neutral-900 sm:text-[1.75rem] sm:leading-snug;
+  }
+
+  .page-subheading {
+    @apply mt-2 max-w-2xl text-base leading-relaxed text-neutral-600;
+  }
+
+  /* Marketing / long-form readability */
+  .prose-marketing {
+    @apply max-w-prose text-neutral-600 leading-relaxed;
+  }
+
+  .prose-marketing h2 {
+    @apply text-neutral-900;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.18s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.slide-in-from-right {
+  animation: slide-in-from-right 0.22s ease-out;
+}
