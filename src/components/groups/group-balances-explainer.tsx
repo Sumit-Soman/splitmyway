@@ -5,7 +5,7 @@ import { ArrowDownLeft, ArrowUpRight, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
-import { MemberAvatar } from "@/components/shared/member-avatar";
+import { MemberAvatar, MemberName } from "@/components/shared/member-avatar";
 import { cn, formatCurrency } from "@/lib/utils";
 
 type BalanceRow = { userId: string; name: string | null; email: string; balance: number };
@@ -162,7 +162,9 @@ export function GroupBalancesExplainer({
                       <div className="min-w-0 pt-0.5">
                         <p className="text-sm leading-snug text-neutral-900">
                           <span className="text-neutral-500">Pay </span>
-                          <span className="font-semibold">{s.toName}</span>
+                          <MemberName userId={s.toId} className="font-semibold">
+                            {s.toName}
+                          </MemberName>
                         </p>
                         <p className="mt-1.5 text-xs leading-relaxed text-neutral-500">
                           This transfer is one of the few moves needed so everyone ends at zero.
@@ -215,7 +217,9 @@ export function GroupBalancesExplainer({
                       <div className="min-w-0 pt-0.5">
                         <p className="text-sm leading-snug text-neutral-900">
                           <span className="text-neutral-500">Receive from </span>
-                          <span className="font-semibold">{s.fromName}</span>
+                          <MemberName userId={s.fromId} className="font-semibold">
+                            {s.fromName}
+                          </MemberName>
                         </p>
                         <p className="mt-1.5 text-xs leading-relaxed text-neutral-500">
                           When they pay you this amount, your shared balance moves toward settled.
@@ -272,7 +276,9 @@ export function GroupBalancesExplainer({
                     size="sm"
                     className="shrink-0"
                   />
-                  <span className="font-medium">{s.fromName}</span>
+                  <MemberName userId={s.fromId} className="font-medium">
+                    {s.fromName}
+                  </MemberName>
                   <span className="text-neutral-400">pays</span>
                   <MemberAvatar
                     userId={s.toId}
@@ -282,7 +288,9 @@ export function GroupBalancesExplainer({
                     size="sm"
                     className="shrink-0"
                   />
-                  <span className="font-medium">{s.toName}</span>
+                  <MemberName userId={s.toId} className="font-medium">
+                    {s.toName}
+                  </MemberName>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm tabular-nums text-neutral-700">{formatCurrency(s.amount, groupCurrency)}</span>
@@ -328,7 +336,9 @@ export function GroupBalancesExplainer({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                      <p className="truncate text-sm font-semibold leading-snug text-neutral-900">{b.name ?? b.email}</p>
+                      <MemberName userId={b.userId} className="truncate text-sm font-semibold leading-snug">
+                        {b.name ?? b.email}
+                      </MemberName>
                       {isYou ? (
                         <span className="inline-flex shrink-0 items-center rounded border border-neutral-800 bg-neutral-900 px-1.5 py-px text-[10px] font-semibold uppercase leading-none tracking-wide text-white">
                           You

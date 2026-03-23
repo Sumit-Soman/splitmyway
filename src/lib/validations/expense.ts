@@ -16,6 +16,10 @@ export const createExpenseSchema = z.object({
   shares: z.record(z.string(), z.coerce.number().int().positive()).optional(),
 });
 
+export const updateExpenseSchema = createExpenseSchema.extend({
+  expenseId: z.string().uuid(),
+});
+
 export const settlementSchema = z.object({
   groupId: z.string().uuid(),
   fromId: z.string().uuid(),

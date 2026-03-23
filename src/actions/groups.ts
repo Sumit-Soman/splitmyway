@@ -1,10 +1,12 @@
 "use server";
 
 import { unstable_noStore as noStore } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/auth/server-user";
+import { getAuthUser, requireUser } from "@/lib/auth/server-user";
 import { calculateBalances } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
+import { memberSearchMatchSql, sanitizeMemberSearchRaw } from "@/lib/member-search-sql";
 import { addMemberSchema, createGroupSchema } from "@/lib/validations/group";
 import { ACTIVITY_TYPES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
@@ -139,6 +141,83 @@ export async function getGroupById(groupId: string) {
     ...membership.group,
     role: membership.role,
   };
+}
+
+export type MemberSearchHit = {
+  id: string;
+  name: string | null;
+  email: string;
+  avatarUrl: string | null;
+};
+
+/**
+ * Search registered users by first name (first word of display name), min 3 characters.
+ * Group admins only; excludes current members and yourself.
+ */
+export async function searchGroupMemberCandidates(groupId: string, query: string): Promise<MemberSearchHit[]> {
+  noStore();
+  const user = await getAuthUser();
+  if (!user) return [];
+
+  const raw = sanitizeMemberSearchRaw(query);
+  if (!raw) return [];
+
+  const admin = await prisma.groupMember.findUnique({
+    where: { userId_groupId: { userId: user.id, groupId } },
+  });
+  if (!admin || admin.role !== "admin") return [];
+
+  const memberRows = await prisma.groupMember.findMany({
+    where: { groupId },
+    select: { userId: true },
+  });
+  const memberIds = memberRows.map((m) => m.userId);
+
+  const matchSql = memberSearchMatchSql(raw);
+
+  try {
+    if (memberIds.length === 0) {
+      const rows = await prisma.$queryRaw<
+        { id: string; name: string | null; email: string; avatar_url: string | null }[]
+      >(Prisma.sql`
+        SELECT u.id, u.name, u.email, u.avatar_url
+        FROM users u
+        WHERE ${matchSql}
+          AND u.id::text <> ${user.id}::text
+        ORDER BY u.name ASC NULLS LAST
+        LIMIT 12
+      `);
+      return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        avatarUrl: r.avatar_url,
+      }));
+    }
+
+    const rows = await prisma.$queryRaw<
+      { id: string; name: string | null; email: string; avatar_url: string | null }[]
+    >(Prisma.sql`
+      SELECT u.id, u.name, u.email, u.avatar_url
+      FROM users u
+      WHERE ${matchSql}
+        AND u.id::text <> ${user.id}::text
+        AND u.id::text NOT IN (${Prisma.join(memberIds)})
+      ORDER BY u.name ASC NULLS LAST
+      LIMIT 12
+    `);
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      avatarUrl: r.avatar_url,
+    }));
+  } catch (e) {
+    if (process.env.NODE_ENV === "development") {
+      console.error("[searchGroupMemberCandidates]", e);
+    }
+    return [];
+  }
 }
 
 export async function addMemberToGroup(

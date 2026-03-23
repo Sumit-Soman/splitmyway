@@ -7,7 +7,7 @@ export function memberColorIndex(userId: string): number {
   return Math.abs(h) % MEMBER_PALETTE.length;
 }
 
-/** Distinct, accessible tints for avatars, dots, and row accents. */
+/** Distinct, accessible tints for avatars, dots, row accents, and name labels. */
 export const MEMBER_PALETTE = [
   {
     ring: "ring-emerald-500/35",
@@ -15,6 +15,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-emerald-500",
     border: "border-l-4 border-emerald-500",
     rowBg: "bg-emerald-50/60",
+    nameText: "text-emerald-900",
   },
   {
     ring: "ring-sky-500/40",
@@ -22,6 +23,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-sky-500",
     border: "border-l-4 border-sky-500",
     rowBg: "bg-sky-50/60",
+    nameText: "text-sky-900",
   },
   {
     ring: "ring-violet-500/35",
@@ -29,6 +31,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-violet-500",
     border: "border-l-4 border-violet-500",
     rowBg: "bg-violet-50/60",
+    nameText: "text-violet-900",
   },
   {
     ring: "ring-amber-500/40",
@@ -36,6 +39,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-amber-500",
     border: "border-l-4 border-amber-500",
     rowBg: "bg-amber-50/60",
+    nameText: "text-amber-950",
   },
   {
     ring: "ring-rose-500/35",
@@ -43,6 +47,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-rose-500",
     border: "border-l-4 border-rose-500",
     rowBg: "bg-rose-50/60",
+    nameText: "text-rose-900",
   },
   {
     ring: "ring-cyan-500/40",
@@ -50,6 +55,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-cyan-500",
     border: "border-l-4 border-cyan-500",
     rowBg: "bg-cyan-50/60",
+    nameText: "text-cyan-900",
   },
   {
     ring: "ring-indigo-500/35",
@@ -57,6 +63,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-indigo-500",
     border: "border-l-4 border-indigo-500",
     rowBg: "bg-indigo-50/60",
+    nameText: "text-indigo-900",
   },
   {
     ring: "ring-fuchsia-500/35",
@@ -64,6 +71,7 @@ export const MEMBER_PALETTE = [
     dot: "bg-fuchsia-500",
     border: "border-l-4 border-fuchsia-500",
     rowBg: "bg-fuchsia-50/60",
+    nameText: "text-fuchsia-900",
   },
 ] as const;
 

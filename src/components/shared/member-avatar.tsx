@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn, getInitials } from "@/lib/utils";
 import { getMemberPalette } from "@/lib/member-colors";
@@ -52,4 +52,21 @@ export function MemberAvatar({
 export function MemberDot({ userId, className }: { userId: string; className?: string }) {
   const p = getMemberPalette(userId);
   return <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", p.dot, className)} aria-hidden />;
+}
+
+/** Consistent hue for a member’s display name (pairs with MemberDot / MemberAvatar). */
+export function MemberName({
+  userId,
+  children,
+  className,
+  as: Tag = "span",
+}: {
+  userId: string;
+  children: ReactNode;
+  className?: string;
+  as?: "span" | "strong";
+}) {
+  const p = getMemberPalette(userId);
+  const Comp = Tag;
+  return <Comp className={cn(p.nameText, className)}>{children}</Comp>;
 }

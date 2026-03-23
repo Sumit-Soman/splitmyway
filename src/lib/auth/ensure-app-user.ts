@@ -6,6 +6,28 @@ function normalizeEmail(e: string): string {
   return e.trim().toLowerCase();
 }
 
+/** Supabase OAuth often sets `full_name` / `given_name`+`family_name`; signup uses `name`. */
+function displayNameFromAuthMetadata(user: AuthUser): string | null {
+  const m = user.user_metadata as Record<string, unknown> | undefined;
+  if (!m) return null;
+  const pick = (key: string) => {
+    const v = m[key];
+    return typeof v === "string" ? v.trim() : "";
+  };
+  const joined = [pick("given_name"), pick("family_name")].filter(Boolean).join(" ").trim();
+  return pick("name") || pick("full_name") || joined || null;
+}
+
+async function syncEmptyNameFromAuth(user: AuthUser, row: AppUser): Promise<AppUser> {
+  if (row.name?.trim()) return row;
+  const fromAuth = displayNameFromAuthMetadata(user);
+  if (!fromAuth) return row;
+  return prisma.user.update({
+    where: { id: row.id },
+    data: { name: fromAuth },
+  });
+}
+
 /**
  * When Supabase auth user id does not match our `users.id` but email matches,
  * re-point all FKs from the old row to the current auth id, then remove the orphan row.
@@ -61,11 +83,11 @@ export async function ensureAppUserForAuth(user: AuthUser): Promise<AppUser> {
         where: { id: user.id },
         data: {
           email,
-          name: (user.user_metadata?.name as string | undefined) ?? byId.name,
+          name: displayNameFromAuthMetadata(user) ?? byId.name,
         },
       });
     }
-    return byId;
+    return syncEmptyNameFromAuth(user, byId);
   }
 
   const byEmail = await prisma.user.findFirst({
@@ -74,9 +96,9 @@ export async function ensureAppUserForAuth(user: AuthUser): Promise<AppUser> {
 
   if (byEmail) {
     if (byEmail.id === user.id) {
-      return byEmail;
+      return syncEmptyNameFromAuth(user, byEmail);
     }
-    const name = (user.user_metadata?.name as string | undefined) ?? byEmail.name;
+    const name = displayNameFromAuthMetadata(user) ?? byEmail.name;
     await reassignUserIdToAuthId(byEmail.id, user.id, email, name ?? null);
     const merged = await prisma.user.findUnique({ where: { id: user.id } });
     if (!merged) throw new Error("Failed to merge app user with auth");
@@ -87,7 +109,7 @@ export async function ensureAppUserForAuth(user: AuthUser): Promise<AppUser> {
     data: {
       id: user.id,
       email,
-      name: (user.user_metadata?.name as string | undefined) ?? null,
+      name: displayNameFromAuthMetadata(user),
       currency: "USD",
     },
   });

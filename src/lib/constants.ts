@@ -45,6 +45,7 @@ export const SPLIT_METHODS = [
 
 export const ACTIVITY_TYPES = {
   EXPENSE_ADDED: "expense_added",
+  EXPENSE_UPDATED: "expense_updated",
   EXPENSE_DELETED: "expense_deleted",
   SETTLEMENT_RECORDED: "settlement_recorded",
   MEMBER_ADDED: "member_added",

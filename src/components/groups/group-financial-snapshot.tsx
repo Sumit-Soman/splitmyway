@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import { MemberAvatar } from "@/components/shared/member-avatar";
+import { MemberAvatar, MemberDot, MemberName } from "@/components/shared/member-avatar";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
 import { formatCurrency } from "@/lib/utils";
 
-type Suggestion = {
+type SnapshotSuggestion = {
   fromId: string;
   toId: string;
   amount: number;
@@ -33,8 +33,8 @@ export function GroupFinancialSnapshot({
   expenses: ExpenseRow[];
   settlements: SettlementRow[];
   balances: { userId: string; balance: number }[];
-  youPaySuggestions: Suggestion[];
-  youReceiveSuggestions: Suggestion[];
+  youPaySuggestions: SnapshotSuggestion[];
+  youReceiveSuggestions: SnapshotSuggestion[];
 }) {
   const yourBalance = balances.find((b) => b.userId === currentUserId)?.balance ?? 0;
 
@@ -125,8 +125,14 @@ export function GroupFinancialSnapshot({
                   key={`snap-pay-${s.toId}-${i}`}
                   className="flex items-center justify-between gap-3 rounded-lg bg-rose-500/[0.07] px-3 py-2"
                 >
-                  <span className="min-w-0 truncate text-[13px] text-neutral-700">
-                    → <span className="font-medium text-neutral-900">{s.toName}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 truncate text-[13px] text-neutral-700">
+                    <span className="text-neutral-400" aria-hidden>
+                      →
+                    </span>
+                    <MemberDot userId={s.toId} />
+                    <MemberName userId={s.toId} className="font-medium">
+                      {s.toName}
+                    </MemberName>
                   </span>
                   <CurrencyDisplay
                     className="shrink-0 text-[13px] font-semibold"
@@ -141,8 +147,14 @@ export function GroupFinancialSnapshot({
                   key={`snap-recv-${s.fromId}-${i}`}
                   className="flex items-center justify-between gap-3 rounded-lg bg-emerald-500/[0.08] px-3 py-2"
                 >
-                  <span className="min-w-0 truncate text-[13px] text-neutral-700">
-                    ← <span className="font-medium text-neutral-900">{s.fromName}</span>
+                  <span className="flex min-w-0 items-center gap-1.5 truncate text-[13px] text-neutral-700">
+                    <span className="text-neutral-400" aria-hidden>
+                      ←
+                    </span>
+                    <MemberDot userId={s.fromId} />
+                    <MemberName userId={s.fromId} className="font-medium">
+                      {s.fromName}
+                    </MemberName>
                   </span>
                   <CurrencyDisplay
                     className="shrink-0 text-[13px] font-semibold"
@@ -172,7 +184,9 @@ export function GroupFinancialSnapshot({
                       email={member.email}
                       avatarUrl={member.avatarUrl}
                     />
-                    <span className="truncate text-sm text-neutral-800">{member.name ?? member.email}</span>
+                    <MemberName userId={member.userId} className="truncate text-sm font-medium">
+                      {member.name ?? member.email}
+                    </MemberName>
                   </div>
                   <div className="shrink-0 text-right">
                     <span className="block tabular-nums text-sm font-medium text-neutral-900">

@@ -4,8 +4,8 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { ArrowRight, ArrowRightLeft, MoreVertical, Plus, Trash2, Users } from "lucide-react";
-import { createExpense, deleteExpense } from "@/actions/expenses";
+import { ArrowRight, ArrowRightLeft, MoreVertical, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { createExpense, deleteExpense, updateExpense } from "@/actions/expenses";
 import { addMemberToGroup, deleteGroup, removeMemberFromGroup } from "@/actions/groups";
 import { createSettlement } from "@/actions/settlements";
 import type { ActionResult } from "@/types";
@@ -21,13 +21,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
-import { MemberAvatar, MemberDot } from "@/components/shared/member-avatar";
+import { MemberAvatar, MemberDot, MemberName } from "@/components/shared/member-avatar";
+import {
+  ExpenseCategoryIcon,
+  expenseCategoryChipClass,
+  expenseCategoryLabel,
+} from "@/lib/expense-category-icons";
 import { EmptyState } from "@/components/shared/empty-state";
 import { GroupBalancesExplainer } from "@/components/groups/group-balances-explainer";
 import { GroupFinancialSnapshot } from "@/components/groups/group-financial-snapshot";
+import { AddMemberPicker } from "@/components/groups/add-member-picker";
+import { ExpenseDialogForm } from "@/components/groups/expense-dialog-form";
 import { getMemberPalette } from "@/lib/member-colors";
 import { cn, formatCurrency } from "@/lib/utils";
-import { EXPENSE_CATEGORIES, GROUP_CATEGORIES, SPLIT_METHODS, CURRENCIES } from "@/lib/constants";
+import { GROUP_CATEGORIES, SPLIT_METHODS } from "@/lib/constants";
 import { calculateSplit } from "@/lib/calculations/splits";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -90,9 +97,48 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
   const [pctMap, setPctMap] = useState<Record<string, string>>({});
   const [shareMap, setShareMap] = useState<Record<string, string>>({});
 
+  const [editingExpense, setEditingExpense] = useState<GroupDetailSerialized["expenses"][number] | null>(null);
+  const [editAmountStr, setEditAmountStr] = useState("");
+  const [editExpenseCurrency, setEditExpenseCurrency] = useState(group.currency);
+  const [editRatePreview, setEditRatePreview] = useState<{ rate: number; converted: number } | null>(null);
+  const [editSplitMethod, setEditSplitMethod] = useState<"equal" | "exact" | "percentage" | "shares">("equal");
+  const [editSelected, setEditSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.userId)));
+  const [editExactMap, setEditExactMap] = useState<Record<string, string>>({});
+  const [editPctMap, setEditPctMap] = useState<Record<string, string>>({});
+  const [editShareMap, setEditShareMap] = useState<Record<string, string>>({});
+
   useEffect(() => {
     setSelected(new Set(members.map((m) => m.userId)));
   }, [members]);
+
+  useEffect(() => {
+    setEditingExpense(null);
+  }, [group.id]);
+
+  useEffect(() => {
+    if (!editingExpense) return;
+    const e = editingExpense;
+    if (e.originalAmount != null && e.originalCurrency) {
+      setEditAmountStr(e.originalAmount.toFixed(2));
+      setEditExpenseCurrency(e.originalCurrency);
+    } else {
+      setEditAmountStr(e.amount.toFixed(2));
+      setEditExpenseCurrency(e.currency);
+    }
+    setEditSplitMethod(e.splitMethod as "equal" | "exact" | "percentage" | "shares");
+    setEditSelected(new Set(e.participants.map((p) => p.userId)));
+    const em: Record<string, string> = {};
+    const pm: Record<string, string> = {};
+    const sm: Record<string, string> = {};
+    for (const p of e.participants) {
+      if (e.splitMethod === "exact") em[p.userId] = p.amount.toFixed(2);
+      if (e.splitMethod === "percentage" && p.percentage != null) pm[p.userId] = p.percentage.toFixed(1);
+      if (e.splitMethod === "shares" && p.shares != null) sm[p.userId] = String(p.shares);
+    }
+    setEditExactMap(em);
+    setEditPctMap(pm);
+    setEditShareMap(sm);
+  }, [editingExpense]);
 
   const amountNum = parseFloat(amountStr) || 0;
 
@@ -144,6 +190,65 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
     });
   }, [amountNum, expenseCurrency, group.currency, ratePreview, participantIds, splitMethod, exactMap, pctMap, shareMap]);
 
+  const editAmountNum = parseFloat(editAmountStr) || 0;
+  const editParticipantIds = useMemo(() => Array.from(editSelected), [editSelected]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!editingExpense || !editAmountNum || editExpenseCurrency === group.currency) {
+        setEditRatePreview(null);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `/api/exchange-rate?from=${encodeURIComponent(editExpenseCurrency)}&to=${encodeURIComponent(group.currency)}`
+        );
+        const j = (await res.json()) as { rate?: number };
+        if (cancelled || !j.rate) return;
+        setEditRatePreview({ rate: j.rate, converted: Math.round(editAmountNum * j.rate * 100) / 100 });
+      } catch {
+        setEditRatePreview(null);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [editingExpense, editAmountNum, editExpenseCurrency, group.currency]);
+
+  const editPreviewSplit = useMemo(() => {
+    const total =
+      editExpenseCurrency !== group.currency && editRatePreview
+        ? editRatePreview.converted
+        : editAmountNum;
+    if (!total || editParticipantIds.length === 0) return null;
+    return calculateSplit({
+      method: editSplitMethod,
+      totalAmount: total,
+      participantIds: editParticipantIds,
+      exactAmounts: Object.fromEntries(
+        Object.entries(editExactMap).map(([k, v]) => [k, parseFloat(v) || 0])
+      ),
+      percentages: Object.fromEntries(
+        Object.entries(editPctMap).map(([k, v]) => [k, parseFloat(v) || 0])
+      ),
+      shares: Object.fromEntries(
+        Object.entries(editShareMap).map(([k, v]) => [k, parseInt(v, 10) || 1])
+      ),
+    });
+  }, [
+    editAmountNum,
+    editExpenseCurrency,
+    group.currency,
+    editRatePreview,
+    editParticipantIds,
+    editSplitMethod,
+    editExactMap,
+    editPctMap,
+    editShareMap,
+  ]);
+
   const [expenseState, expenseAction, expensePending] = useActionState(
     async (_p: ActionResult | null, formData: FormData) => createExpense(_p, formData),
     null
@@ -158,6 +263,25 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
       toast({ title: "Could not add expense", description: expenseState.error, variant: "destructive" });
     }
   }, [expenseState, router, toast]);
+
+  const [updateExpenseState, updateExpenseAction, updateExpensePending] = useActionState(
+    async (_p: ActionResult | null, formData: FormData) => updateExpense(_p, formData),
+    null
+  );
+
+  useEffect(() => {
+    if (updateExpenseState?.success) {
+      toast({ title: "Expense updated" });
+      setEditingExpense(null);
+      router.refresh();
+    } else if (updateExpenseState && !updateExpenseState.success) {
+      toast({
+        title: "Could not update expense",
+        description: updateExpenseState.error,
+        variant: "destructive",
+      });
+    }
+  }, [updateExpenseState, router, toast]);
 
   const [memberState, memberAction, memberPending] = useActionState(
     async (_p: ActionResult | null, formData: FormData) => addMemberToGroup(_p, formData),
@@ -238,227 +362,77 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
               Add expense
             </Button>
             <DialogContent title="Add expense" className="max-w-lg">
-                <form action={expenseAction} className="space-y-4">
-                  <input type="hidden" name="groupId" value={group.id} />
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="description">Description</Label>
-                      <Input id="description" name="description" required />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="amount">Amount</Label>
-                      <Input
-                        id="amount"
-                        name="amount"
-                        type="number"
-                        step="0.01"
-                        required
-                        value={amountStr}
-                        onChange={(e) => setAmountStr(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="currency">Currency</Label>
-                      <Select
-                        id="currency"
-                        name="currency"
-                        value={expenseCurrency}
-                        onChange={(e) => setExpenseCurrency(e.target.value)}
-                      >
-                        {CURRENCIES.map((c) => (
-                          <option key={c.value} value={c.value}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    {expenseCurrency !== group.currency && ratePreview ? (
-                      <div className="sm:col-span-2 rounded-lg border border-neutral-200 bg-neutral-100 p-3 text-sm text-neutral-800">
-                        Live rate: 1 {expenseCurrency} = {ratePreview.rate.toFixed(6)} {group.currency}. Converted:{" "}
-                        <strong>{formatCurrency(ratePreview.converted, group.currency)}</strong>
-                      </div>
-                    ) : null}
-                    <div className="space-y-2">
-                      <Label htmlFor="category">Category</Label>
-                      <Select id="category" name="category" defaultValue="general">
-                        {EXPENSE_CATEGORIES.map((c) => (
-                          <option key={c.value} value={c.value}>
-                            {c.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="date">Date</Label>
-                      <Input id="date" name="date" type="datetime-local" defaultValue={format(new Date(), "yyyy-MM-dd'T'HH:mm")} />
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="paidById">Paid by</Label>
-                      <Select id="paidById" name="paidById" defaultValue={currentUserId}>
-                        {members.map((m) => (
-                          <option key={m.userId} value={m.userId}>
-                            {m.name ?? m.email}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label htmlFor="notes">Notes</Label>
-                      <Textarea id="notes" name="notes" rows={2} />
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                      <Label>Split method</Label>
-                      <Select
-                        name="splitMethod"
-                        value={splitMethod}
-                        onChange={(e) => setSplitMethod(e.target.value as typeof splitMethod)}
-                      >
-                        {SPLIT_METHODS.map((s) => (
-                          <option key={s.value} value={s.value}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Participants</Label>
-                    <div className="grid gap-2">
-                      {members.map((m) => (
-                        <label key={m.userId} className="flex items-center gap-2 text-sm text-neutral-700">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(m.userId)}
-                            onChange={() => {
-                              setSelected((prev) => {
-                                const n = new Set(prev);
-                                if (n.has(m.userId)) n.delete(m.userId);
-                                else n.add(m.userId);
-                                return n;
-                              });
-                            }}
-                          />
-                          <MemberDot userId={m.userId} />
-                          {m.name ?? m.email}
-                        </label>
-                      ))}
-                    </div>
-                    {participantIds.map((id) => (
-                      <input key={id} type="hidden" name="participantIds" value={id} />
-                    ))}
-                  </div>
-
-                  {splitMethod === "exact" ? (
-                    <div className="space-y-2">
-                      {participantIds.map((id) => (
-                        <div key={id} className="flex items-center gap-2">
-                          <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
-                            <MemberDot userId={id} />
-                            {members.find((x) => x.userId === id)?.name ?? id}
-                          </span>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={exactMap[id] ?? ""}
-                            onChange={(e) => setExactMap((p) => ({ ...p, [id]: e.target.value }))}
-                            placeholder="0.00"
-                          />
-                        </div>
-                      ))}
-                      <input
-                        type="hidden"
-                        name="exactAmounts"
-                        value={JSON.stringify(
-                          Object.fromEntries(
-                            participantIds.map((id) => [id, parseFloat(exactMap[id] ?? "0") || 0])
-                          )
-                        )}
-                      />
-                    </div>
-                  ) : null}
-
-                  {splitMethod === "percentage" ? (
-                    <div className="space-y-2">
-                      {participantIds.map((id) => (
-                        <div key={id} className="flex items-center gap-2">
-                          <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
-                            <MemberDot userId={id} />
-                            {members.find((x) => x.userId === id)?.name ?? id}
-                          </span>
-                          <Input
-                            type="number"
-                            step="0.1"
-                            value={pctMap[id] ?? ""}
-                            onChange={(e) => setPctMap((p) => ({ ...p, [id]: e.target.value }))}
-                            placeholder="%"
-                          />
-                        </div>
-                      ))}
-                      <input
-                        type="hidden"
-                        name="percentages"
-                        value={JSON.stringify(
-                          Object.fromEntries(
-                            participantIds.map((id) => [id, parseFloat(pctMap[id] ?? "0") || 0])
-                          )
-                        )}
-                      />
-                    </div>
-                  ) : null}
-
-                  {splitMethod === "shares" ? (
-                    <div className="space-y-2">
-                      {participantIds.map((id) => (
-                        <div key={id} className="flex items-center gap-2">
-                          <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
-                            <MemberDot userId={id} />
-                            {members.find((x) => x.userId === id)?.name ?? id}
-                          </span>
-                          <Input
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={shareMap[id] ?? "1"}
-                            onChange={(e) => setShareMap((p) => ({ ...p, [id]: e.target.value }))}
-                          />
-                        </div>
-                      ))}
-                      <input
-                        type="hidden"
-                        name="shares"
-                        value={JSON.stringify(
-                          Object.fromEntries(
-                            participantIds.map((id) => [id, parseInt(shareMap[id] ?? "1", 10) || 1])
-                          )
-                        )}
-                      />
-                    </div>
-                  ) : null}
-
-                  {previewSplit && previewSplit.ok ? (
-                    <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600">
-                      <p className="mb-2 font-medium text-neutral-700">Split preview ({group.currency})</p>
-                      <ul className="space-y-1">
-                        {Object.entries(previewSplit.amounts).map(([uid, amt]) => (
-                          <li key={uid} className="flex justify-between gap-2">
-                            <span className="flex min-w-0 items-center gap-1.5">
-                              <MemberDot userId={uid} />
-                              {members.find((x) => x.userId === uid)?.name ?? uid}
-                            </span>
-                            <span className="tabular-nums text-neutral-900">{formatCurrency(amt, group.currency)}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : previewSplit && !previewSplit.ok ? (
-                    <p className="text-sm text-red-600">{previewSplit.error}</p>
-                  ) : null}
-
-                  <Button type="submit" disabled={expensePending || participantIds.length === 0}>
-                    {expensePending ? "Saving…" : "Save expense"}
-                  </Button>
-                </form>
+              <form action={expenseAction} className="space-y-4">
+                <ExpenseDialogForm
+                  formKey={`add-${group.id}`}
+                  groupId={group.id}
+                  groupCurrency={group.currency}
+                  currentUserId={currentUserId}
+                  members={members}
+                  amountStr={amountStr}
+                  setAmountStr={setAmountStr}
+                  expenseCurrency={expenseCurrency}
+                  setExpenseCurrency={setExpenseCurrency}
+                  ratePreview={ratePreview}
+                  splitMethod={splitMethod}
+                  setSplitMethod={setSplitMethod}
+                  selected={selected}
+                  setSelected={setSelected}
+                  exactMap={exactMap}
+                  setExactMap={setExactMap}
+                  pctMap={pctMap}
+                  setPctMap={setPctMap}
+                  shareMap={shareMap}
+                  setShareMap={setShareMap}
+                  previewSplit={previewSplit}
+                  submitLabel="Save expense"
+                  pending={expensePending}
+                />
+              </form>
+            </DialogContent>
+            </Dialog>
+            <Dialog
+              open={!!editingExpense}
+              onOpenChange={(open) => {
+                if (!open) setEditingExpense(null);
+              }}
+            >
+              <DialogContent title="Edit expense" className="max-w-lg">
+                {editingExpense ? (
+                  <form action={updateExpenseAction} className="space-y-4">
+                    <ExpenseDialogForm
+                      formKey={`edit-${editingExpense.id}`}
+                      expenseId={editingExpense.id}
+                      groupId={group.id}
+                      groupCurrency={group.currency}
+                      currentUserId={currentUserId}
+                      members={members}
+                      amountStr={editAmountStr}
+                      setAmountStr={setEditAmountStr}
+                      expenseCurrency={editExpenseCurrency}
+                      setExpenseCurrency={setEditExpenseCurrency}
+                      ratePreview={editRatePreview}
+                      splitMethod={editSplitMethod}
+                      setSplitMethod={setEditSplitMethod}
+                      selected={editSelected}
+                      setSelected={setEditSelected}
+                      exactMap={editExactMap}
+                      setExactMap={setEditExactMap}
+                      pctMap={editPctMap}
+                      setPctMap={setEditPctMap}
+                      shareMap={editShareMap}
+                      setShareMap={setEditShareMap}
+                      previewSplit={editPreviewSplit}
+                      defaultDescription={editingExpense.description}
+                      defaultCategory={editingExpense.category}
+                      defaultDateLocal={format(new Date(editingExpense.date), "yyyy-MM-dd'T'HH:mm")}
+                      defaultPaidById={editingExpense.paidById}
+                      defaultNotes={editingExpense.notes ?? ""}
+                      submitLabel="Save changes"
+                      pending={updateExpensePending}
+                    />
+                  </form>
+                ) : null}
               </DialogContent>
             </Dialog>
             {isAdmin ? (
@@ -527,27 +501,82 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                             direction="neutral"
                           />
                         </div>
-                        <p className="mt-1 text-[11px] leading-relaxed text-neutral-500 sm:text-xs">
-                          {format(new Date(e.date), "MMM d, yyyy")} · Paid by{" "}
-                          <span className="text-neutral-600">{e.paidBy.name ?? e.paidBy.email}</span> ·{" "}
-                          {SPLIT_METHODS.find((s) => s.value === e.splitMethod)?.label ?? e.splitMethod}
-                        </p>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-relaxed text-neutral-500 sm:text-xs">
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-medium text-neutral-800",
+                              expenseCategoryChipClass(e.category)
+                            )}
+                          >
+                            <ExpenseCategoryIcon category={e.category} className="h-3.5 w-3.5" />
+                            {expenseCategoryLabel(e.category)}
+                          </span>
+                          <span aria-hidden className="text-neutral-300">
+                            ·
+                          </span>
+                          <span>{format(new Date(e.date), "MMM d, yyyy")}</span>
+                          <span aria-hidden className="text-neutral-300">
+                            ·
+                          </span>
+                          <span>
+                            Paid by{" "}
+                            <MemberName userId={e.paidBy.id} className="font-medium">
+                              {e.paidBy.name ?? e.paidBy.email}
+                            </MemberName>
+                          </span>
+                          <span aria-hidden className="text-neutral-300">
+                            ·
+                          </span>
+                          <span>{SPLIT_METHODS.find((s) => s.value === e.splitMethod)?.label ?? e.splitMethod}</span>
+                        </div>
+                        {e.participants.length > 0 ? (
+                          <ul
+                            className="mt-2.5 space-y-1 rounded-lg border border-neutral-100 bg-neutral-50/90 px-2.5 py-2"
+                            aria-label="Split breakdown"
+                          >
+                            {e.participants.map((p) => (
+                              <li key={p.id} className="flex items-center justify-between gap-2 text-[11px] sm:text-xs">
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  <MemberDot userId={p.userId} />
+                                  <MemberName userId={p.userId} className="truncate font-medium">
+                                    {p.user.name ?? p.user.email}
+                                  </MemberName>
+                                </span>
+                                <span className="shrink-0 tabular-nums text-neutral-800">
+                                  {formatCurrency(p.amount, e.currency)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                         {e.originalCurrency && e.originalCurrency !== e.currency && e.originalAmount != null ? (
                           <p className="mt-1 text-[11px] text-neutral-600 sm:text-xs">
                             Original: {formatCurrency(e.originalAmount, e.originalCurrency)} @ rate {e.exchangeRate}
                           </p>
                         ) : null}
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="-mr-1 shrink-0 self-start text-neutral-400 hover:text-neutral-700"
-                        aria-label="Delete expense"
-                        onClick={() => setConfirmExpenseId(e.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="-mr-1 flex shrink-0 flex-col gap-0.5 self-start sm:flex-row sm:items-center">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="text-neutral-400 hover:text-neutral-700"
+                          aria-label="Edit expense"
+                          onClick={() => setEditingExpense(e)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="text-neutral-400 hover:text-neutral-700"
+                          aria-label="Delete expense"
+                          onClick={() => setConfirmExpenseId(e.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -587,16 +616,14 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
             </CardHeader>
             <CardContent className="space-y-6">
               {isAdmin ? (
-                <form action={memberAction} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <input type="hidden" name="groupId" value={group.id} />
-                  <div className="flex-1 space-y-2">
-                    <Label htmlFor="email">Add by email</Label>
-                    <Input id="email" name="email" type="email" placeholder="friend@email.com" required />
-                  </div>
-                  <Button type="submit" disabled={memberPending}>
-                    Add
-                  </Button>
-                </form>
+                <div className="rounded-xl border border-neutral-200/90 bg-neutral-50/40 p-4 sm:p-5">
+                  <AddMemberPicker
+                    key={`${group.id}-${members.length}-${invitations.length}`}
+                    groupId={group.id}
+                    formAction={memberAction}
+                    pending={memberPending}
+                  />
+                </div>
               ) : null}
               <Separator />
               <ul className="space-y-2">
@@ -617,7 +644,9 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                         size="sm"
                       />
                       <div>
-                        <p className="text-sm font-medium text-neutral-800">{m.name ?? m.email}</p>
+                        <MemberName userId={m.userId} className="text-sm font-medium">
+                          {m.name ?? m.email}
+                        </MemberName>
                         <p className="text-xs text-neutral-500">{m.role}</p>
                       </div>
                     </div>
@@ -706,8 +735,9 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-medium text-neutral-800">
-                              {fromLabel}{" "}
-                              <span className="font-normal text-neutral-500">paid</span> {toLabel}
+                              <MemberName userId={s.fromId}>{fromLabel}</MemberName>{" "}
+                              <span className="font-normal text-neutral-500">paid</span>{" "}
+                              <MemberName userId={s.toId}>{toLabel}</MemberName>
                             </p>
                             <p className="text-xs text-neutral-500">
                               {format(when, "MMM d, yyyy")} · {format(when, "h:mm a")}

@@ -15,7 +15,7 @@ import {
 import type { DashboardData } from "@/actions/dashboard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
-import { MemberDot } from "@/components/shared/member-avatar";
+import { MemberDot, MemberName } from "@/components/shared/member-avatar";
 import { buttonVariants } from "@/components/ui/button";
 import { cn, formatCurrency } from "@/lib/utils";
 import { ACTIVITY_TYPES } from "@/lib/constants";
@@ -53,6 +53,8 @@ function formatActivity(type: string, metadata: unknown) {
   switch (type) {
     case ACTIVITY_TYPES.EXPENSE_ADDED:
       return `Expense added: ${String(m?.description ?? "Expense")}`;
+    case ACTIVITY_TYPES.EXPENSE_UPDATED:
+      return `Expense updated: ${String(m?.description ?? "Expense")}`;
     case ACTIVITY_TYPES.EXPENSE_DELETED:
       return `Expense removed: ${String(m?.description ?? "")}`;
     case ACTIVITY_TYPES.SETTLEMENT_RECORDED:
@@ -71,6 +73,7 @@ function formatActivity(type: string, metadata: unknown) {
 function activityIcon(type: string) {
   switch (type) {
     case ACTIVITY_TYPES.EXPENSE_ADDED:
+    case ACTIVITY_TYPES.EXPENSE_UPDATED:
     case ACTIVITY_TYPES.EXPENSE_DELETED:
       return Receipt;
     case ACTIVITY_TYPES.SETTLEMENT_RECORDED:
@@ -335,10 +338,14 @@ export function DashboardHome({
                       <div className="px-4 py-4">
                         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-800">
                           <MemberDot userId={s.fromId} />
-                          <span className="font-medium">{s.fromName}</span>
+                          <MemberName userId={s.fromId} className="font-medium">
+                            {s.fromName}
+                          </MemberName>
                           <ArrowRight className="h-3.5 w-3.5 text-neutral-300" aria-hidden />
                           <MemberDot userId={s.toId} />
-                          <span className="font-medium">{s.toName}</span>
+                          <MemberName userId={s.toId} className="font-medium">
+                            {s.toName}
+                          </MemberName>
                         </p>
                         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                           <CurrencyDisplay
