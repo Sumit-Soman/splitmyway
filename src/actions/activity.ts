@@ -1,13 +1,10 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/auth/server-user";
 
 export async function getRecentActivity(limit = 10) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return [];
 
   const memberships = await prisma.groupMember.findMany({

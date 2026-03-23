@@ -86,5 +86,5 @@ export function TabsContent({
 }) {
   const ctx = React.useContext(TabsContext);
   if (ctx?.value !== value) return null;
-  return <div className={cn("mt-4", className)}>{children}</div>;
+  return <div className={cn("mt-3", className)}>{children}</div>;
 }

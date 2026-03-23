@@ -15,7 +15,7 @@ export default async function SettlementsPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div>
         <h1 className="page-heading">Settlements</h1>
         <p className="page-subheading">Recorded payments across your groups.</p>
@@ -28,7 +28,7 @@ export default async function SettlementsPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {Array.from(byGroup.entries()).map(([groupId, list]) => (
             <div key={groupId}>
               <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">

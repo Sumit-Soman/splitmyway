@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/auth/server-user";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
 
@@ -48,10 +48,7 @@ type GroupReportSection = {
 };
 
 export async function getReportData(groupId: string | null) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return null;
 
   const memberships = await prisma.groupMember.findMany({

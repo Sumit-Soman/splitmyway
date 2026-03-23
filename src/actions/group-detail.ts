@@ -1,15 +1,14 @@
 "use server";
 
+import { unstable_noStore as noStore } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/auth/server-user";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
 
 export async function getGroupDetailSerialized(groupId: string) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  noStore();
+  const user = await getAuthUser();
   if (!user) return null;
 
   const membership = await prisma.groupMember.findUnique({

@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser, getDbUserById } from "@/lib/auth/server-user";
 import { z } from "zod";
 import type { ActionResult } from "@/types";
 import { revalidatePath } from "next/cache";
@@ -15,10 +15,7 @@ export async function updateProfile(
   _prev: ActionResult | null,
   formData: FormData
 ): Promise<ActionResult> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) {
     return { success: false, error: "Unauthorized" };
   }
@@ -44,18 +41,14 @@ export async function updateProfile(
   });
 
   revalidatePath("/settings");
+  revalidatePath("/settings/profile");
   revalidatePath("/dashboard");
   return { success: true };
 }
 
 export async function getProfile() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) return null;
 
-  return prisma.user.findUnique({
-    where: { id: user.id },
-  });
+  return getDbUserById(user.id);
 }

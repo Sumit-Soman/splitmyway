@@ -32,15 +32,22 @@ export function DropdownMenu({ children }: { children: React.ReactNode }) {
 export function DropdownMenuTrigger({
   children,
   className,
+  onClick,
+  ...rest
 }: {
   children: React.ReactNode;
   className?: string;
-}) {
+  onClick?: React.MouseEventHandler<HTMLDivElement>;
+} & Omit<React.HTMLAttributes<HTMLDivElement>, "onClick" | "className" | "children">) {
   const ctx = React.useContext(DropdownCtx);
   return (
     <div
+      {...rest}
       className={cn(className)}
-      onClick={() => ctx?.setOpen(!ctx.open)}
+      onClick={(e) => {
+        onClick?.(e);
+        ctx?.setOpen(!ctx.open);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") ctx?.setOpen(!ctx?.open);
       }}

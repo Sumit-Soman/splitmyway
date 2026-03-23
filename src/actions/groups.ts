@@ -1,20 +1,15 @@
 "use server";
 
+import { unstable_noStore as noStore } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/auth/server-user";
+import { calculateBalances } from "@/lib/calculations/balances";
+import { toNumber } from "@/lib/utils";
 import { addMemberSchema, createGroupSchema } from "@/lib/validations/group";
 import { ACTIVITY_TYPES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import { revalidatePath } from "next/cache";
-
-async function requireUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-  return user;
-}
+import { redirect } from "next/navigation";
 
 export async function createGroup(
   _prev: ActionResult | null,
@@ -64,33 +59,72 @@ export async function createGroup(
 
   revalidatePath("/groups");
   revalidatePath("/dashboard");
-  return { success: true, data: { id: group.id } };
+  redirect(`/groups/${group.id}`);
 }
 
 export async function getGroupsForUser() {
+  noStore();
   const user = await requireUser();
   const memberships = await prisma.groupMember.findMany({
     where: { userId: user.id },
-    include: {
-      group: {
-        include: {
-          _count: { select: { members: true, expenses: true } },
-        },
-      },
-    },
     orderBy: { joinedAt: "desc" },
+    select: { groupId: true, role: true },
   });
-  return memberships.map((m) => ({
-    id: m.group.id,
-    name: m.group.name,
-    description: m.group.description,
-    category: m.group.category,
-    currency: m.group.currency,
-    role: m.role,
-    memberCount: m.group._count.members,
-    expenseCount: m.group._count.expenses,
-  }));
+  if (memberships.length === 0) return [];
+
+  const groupIds = memberships.map((m) => m.groupId);
+  const roleByGroupId = new Map(memberships.map((m) => [m.groupId, m.role]));
+
+  const groups = await prisma.group.findMany({
+    where: { id: { in: groupIds } },
+    include: {
+      members: { select: { userId: true } },
+      expenses: {
+        include: { participants: true },
+      },
+      settlements: true,
+      _count: { select: { members: true, expenses: true } },
+    },
+  });
+
+  const orderIndex = new Map(groupIds.map((id, i) => [id, i]));
+  groups.sort((a, b) => (orderIndex.get(a.id) ?? 0) - (orderIndex.get(b.id) ?? 0));
+
+  return groups.map((g) => {
+    const memberIds = g.members.map((m) => m.userId);
+    const balancesMap = calculateBalances({
+      memberIds,
+      expenses: g.expenses.map((e) => ({
+        paidById: e.paidById,
+        participants: e.participants.map((p) => ({
+          userId: p.userId,
+          amount: toNumber(p.amount),
+        })),
+      })),
+      settlements: g.settlements.map((s) => ({
+        fromId: s.fromId,
+        toId: s.toId,
+        amount: toNumber(s.amount),
+      })),
+    });
+    const raw = balancesMap[user.id] ?? 0;
+    const yourBalance = Math.round(raw * 100) / 100;
+
+    return {
+      id: g.id,
+      name: g.name,
+      description: g.description,
+      category: g.category,
+      currency: g.currency,
+      role: roleByGroupId.get(g.id) ?? "member",
+      memberCount: g._count.members,
+      expenseCount: g._count.expenses,
+      yourBalance,
+    };
+  });
 }
+
+export type GroupListItem = Awaited<ReturnType<typeof getGroupsForUser>>[number];
 
 export async function getGroupById(groupId: string) {
   const user = await requireUser();
@@ -236,5 +270,6 @@ export async function deleteGroup(groupId: string): Promise<ActionResult> {
   await prisma.group.delete({ where: { id: groupId } });
   revalidatePath("/groups");
   revalidatePath("/dashboard");
+  revalidatePath("/settlements");
   return { success: true };
 }

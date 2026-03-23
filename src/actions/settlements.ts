@@ -1,39 +1,35 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/auth/server-user";
 import { settlementSchema } from "@/lib/validations/expense";
 import { ACTIVITY_TYPES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import { Decimal } from "@prisma/client/runtime/library";
-import { revalidatePath } from "next/cache";
-
-async function requireUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-  return user;
-}
+import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 
 export async function createSettlement(
   _prev: ActionResult | null,
   formData: FormData
 ): Promise<ActionResult> {
   const user = await requireUser();
+  const rawAmount = formData.get("amount");
   const parsed = settlementSchema.safeParse({
     groupId: formData.get("groupId"),
     fromId: formData.get("fromId"),
     toId: formData.get("toId"),
-    amount: formData.get("amount"),
+    amount: typeof rawAmount === "string" ? rawAmount.trim() : rawAmount,
     notes: formData.get("notes") || null,
   });
   if (!parsed.success) {
+    const flat = parsed.error.flatten();
+    const fieldMsg = Object.entries(flat.fieldErrors)
+      .flatMap(([k, msgs]) => msgs.map((m) => `${k}: ${m}`))
+      .join(" · ");
     return {
       success: false,
-      error: "Validation failed",
-      fieldErrors: parsed.error.flatten().fieldErrors as Record<string, string[]>,
+      error: fieldMsg || "Validation failed",
+      fieldErrors: flat.fieldErrors as Record<string, string[]>,
     };
   }
 
@@ -81,13 +77,18 @@ export async function createSettlement(
     }),
   ]);
 
-  revalidatePath(`/groups/${parsed.data.groupId}`);
+  const gid = parsed.data.groupId;
+  // Invalidate the concrete group URL and parent segments so RSC picks up new settlements + balances.
+  revalidatePath(`/groups/${gid}`);
+  revalidatePath("/groups");
   revalidatePath("/settlements");
   revalidatePath("/dashboard");
+  revalidatePath("/reports");
   return { success: true };
 }
 
 export async function getSettlementsForUser() {
+  noStore();
   const user = await requireUser();
   const groups = await prisma.groupMember.findMany({
     where: { userId: user.id },

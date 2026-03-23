@@ -1,36 +1,40 @@
 "use server";
 
+import { unstable_noStore as noStore } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser, getDbUserById } from "@/lib/auth/server-user";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
+import { perf } from "@/lib/perf";
 
 export async function getDashboardData() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  noStore();
+  const user = await perf("getAuthUser", () => getAuthUser());
   if (!user) return null;
 
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
-
-  const groupsData = await prisma.group.findMany({
-    where: { members: { some: { userId: user.id } } },
-    include: {
-      members: { include: { user: true } },
-      expenses: { include: { participants: true } },
-      settlements: true,
-    },
-  });
+  const [dbUser, groupsData] = await perf("prisma dashboard queries", () =>
+    Promise.all([
+      getDbUserById(user.id),
+      prisma.group.findMany({
+        where: { members: { some: { userId: user.id } } },
+        include: {
+          members: { include: { user: true } },
+          expenses: { include: { participants: true } },
+          settlements: true,
+        },
+      }),
+    ])
+  );
 
   let netBalance = 0;
-  const groupSummaries = groupsData.map((g) => ({
-    id: g.id,
-    name: g.name,
-    currency: g.currency,
-    memberCount: g.members.length,
-    totalSpend: g.expenses.reduce((acc, e) => acc + toNumber(e.amount), 0),
-  }));
+  const groupSummaries: Array<{
+    id: string;
+    name: string;
+    currency: string;
+    memberCount: number;
+    totalSpend: number;
+    yourBalance: number;
+  }> = [];
 
   const allSuggestions: Array<{
     groupId: string;
@@ -60,7 +64,17 @@ export async function getDashboardData() {
         amount: toNumber(s.amount),
       })),
     });
-    netBalance += balancesMap[user.id] ?? 0;
+    const yourBal = balancesMap[user.id] ?? 0;
+    netBalance += yourBal;
+
+    groupSummaries.push({
+      id: g.id,
+      name: g.name,
+      currency: g.currency,
+      memberCount: g.members.length,
+      totalSpend: Math.round(g.expenses.reduce((acc, e) => acc + toNumber(e.amount), 0) * 100) / 100,
+      yourBalance: Math.round(yourBal * 100) / 100,
+    });
 
     const txs = minimizeDebts(balancesMap);
     for (const t of txs) {
@@ -91,3 +105,5 @@ export async function getDashboardData() {
     suggestions: allSuggestions,
   };
 }
+
+export type DashboardData = NonNullable<Awaited<ReturnType<typeof getDashboardData>>>;

@@ -1,13 +1,10 @@
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/auth/server-user";
 import { prisma } from "@/lib/prisma";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
 
 export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
   if (!user) {
     return new Response("Unauthorized", { status: 401 });
   }

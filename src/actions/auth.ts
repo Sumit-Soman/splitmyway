@@ -1,8 +1,14 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/prisma";
-import { forgotPasswordSchema, loginSchema, signupSchema } from "@/lib/validations/auth";
+import { getAuthUser } from "@/lib/auth/server-user";
+import { ensureAppUserForAuth } from "@/lib/auth/ensure-app-user";
+import {
+  changePasswordSchema,
+  forgotPasswordSchema,
+  loginSchema,
+  signupSchema,
+} from "@/lib/validations/auth";
 import type { ActionResult } from "@/types";
 import { redirect, unstable_rethrow } from "next/navigation";
 
@@ -25,12 +31,15 @@ export async function login(
 
   try {
     const supabase = await createClient();
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error } = await supabase.auth.signInWithPassword({
       email: parsed.data.email,
       password: parsed.data.password,
     });
     if (error) {
       return { success: false, error: error.message };
+    }
+    if (signInData.user) {
+      await ensureAppUserForAuth(signInData.user);
     }
   } catch (e) {
     unstable_rethrow(e);
@@ -81,19 +90,9 @@ export async function signup(
       };
     }
 
-    await prisma.user.upsert({
-      where: { id: userId },
-      create: {
-        id: userId,
-        email: parsed.data.email,
-        name: parsed.data.name,
-        currency: "USD",
-      },
-      update: {
-        email: parsed.data.email,
-        name: parsed.data.name,
-      },
-    });
+    if (data.user) {
+      await ensureAppUserForAuth(data.user);
+    }
   } catch (e) {
     unstable_rethrow(e);
     throw e;
@@ -139,28 +138,62 @@ export async function forgotPassword(
   return { success: true, message: "Check your email for a password reset link." };
 }
 
-export async function getCurrentUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-  });
-
-  if (!dbUser) {
-    await prisma.user.create({
-      data: {
-        id: user.id,
-        email: user.email ?? "",
-        name: (user.user_metadata?.name as string | undefined) ?? null,
-        currency: "USD",
-      },
-    });
-    return prisma.user.findUnique({ where: { id: user.id } });
+export async function changePassword(
+  _prev: ActionResult | null,
+  formData: FormData
+): Promise<ActionResult> {
+  const raw = {
+    currentPassword: String(formData.get("currentPassword") ?? ""),
+    newPassword: String(formData.get("newPassword") ?? ""),
+    confirmPassword: String(formData.get("confirmPassword") ?? ""),
+  };
+  const parsed = changePasswordSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: "Validation failed",
+      fieldErrors: parsed.error.flatten().fieldErrors as Record<string, string[]>,
+    };
   }
 
-  return dbUser;
+  const authUser = await getAuthUser();
+  if (!authUser?.email) {
+    return {
+      success: false,
+      error: "You must be signed in with email to change your password.",
+    };
+  }
+
+  try {
+    const supabase = await createClient();
+    const { error: verifyErr } = await supabase.auth.signInWithPassword({
+      email: authUser.email,
+      password: parsed.data.currentPassword,
+    });
+    if (verifyErr) {
+      return {
+        success: false,
+        error: "Current password is incorrect, or this account only uses social sign-in.",
+        fieldErrors: { currentPassword: ["Check your current password."] },
+      };
+    }
+
+    const { error: updateErr } = await supabase.auth.updateUser({
+      password: parsed.data.newPassword,
+    });
+    if (updateErr) {
+      return { success: false, error: updateErr.message };
+    }
+  } catch (e) {
+    unstable_rethrow(e);
+    throw e;
+  }
+
+  return { success: true, message: "Your password was updated." };
+}
+
+export async function getCurrentUser() {
+  const user = await getAuthUser();
+  if (!user) return null;
+  return ensureAppUserForAuth(user);
 }

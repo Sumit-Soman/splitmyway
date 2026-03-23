@@ -12,7 +12,10 @@ export type MinimizedTransaction = {
 /**
  * Net balance per user: positive = owed to user, negative = user owes.
  * Expenses: payer is credited total; each participant debited their share.
- * Settlements: from pays to — debits from, credits to.
+ * Settlements: from pays to — reduces debtor’s negative balance and creditor’s positive balance (both toward zero).
+ *
+ * App rule: when a group has **no expenses**, all settlements for that group are removed (see expense deletion).
+ * Otherwise, settlements with an empty expense list would leave phantom balances.
  */
 export function calculateBalances(params: {
   memberIds: string[];
@@ -41,8 +44,8 @@ export function calculateBalances(params: {
   for (const s of params.settlements) {
     if (bal[s.fromId] === undefined) bal[s.fromId] = 0;
     if (bal[s.toId] === undefined) bal[s.toId] = 0;
-    bal[s.fromId] -= s.amount;
-    bal[s.toId] += s.amount;
+    bal[s.fromId] += s.amount;
+    bal[s.toId] -= s.amount;
   }
 
   for (const id of Object.keys(bal)) {

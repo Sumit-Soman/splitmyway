@@ -49,7 +49,10 @@ export function Header({
         </div>
         <div className="flex items-center gap-2">
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex cursor-pointer items-center gap-2 rounded-md p-1 hover:bg-neutral-50">
+            <DropdownMenuTrigger
+              data-testid="e2e-user-menu"
+              className="flex cursor-pointer items-center gap-2 rounded-md p-1 hover:bg-neutral-50"
+            >
               <Avatar className="h-9 w-9">
                 <AvatarFallback>{getInitials(user.name, user.email)}</AvatarFallback>
               </Avatar>

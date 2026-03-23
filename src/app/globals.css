@@ -30,6 +30,43 @@
     @apply mt-2 max-w-2xl text-base leading-relaxed text-neutral-600;
   }
 
+  /* Uppercase labels: stat cards, “Your net position”, “Amount”, field group titles */
+  .app-label-caps {
+    @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500;
+  }
+
+  /* Muted supporting line under a title (dashboard, balances explainer) */
+  .app-text-secondary {
+    @apply text-sm leading-snug text-neutral-600;
+  }
+
+  .app-text-caption {
+    @apply text-xs leading-snug text-neutral-600;
+  }
+
+  /* Standard bordered panel (dashboard tiles, balances executive card) */
+  .app-panel {
+    @apply overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)];
+  }
+
+  /* Headline + metric row: tight rhythm, top-aligned labels */
+  .app-summary-row {
+    @apply grid gap-3 border-b border-neutral-100 bg-neutral-50/80 px-4 py-3.5 sm:grid-cols-[1fr_auto] sm:items-start sm:gap-x-5;
+  }
+
+  /* Two-column explainer body (outgoing / incoming) */
+  .app-flow-split {
+    @apply grid gap-0 sm:grid-cols-2 sm:divide-x sm:divide-neutral-100;
+  }
+
+  .app-flow-split__col {
+    @apply px-4 py-3 sm:py-3;
+  }
+
+  .app-footnote-row {
+    @apply flex gap-2 border-t border-neutral-100 bg-neutral-50/50 px-4 py-2.5;
+  }
+
   /* Marketing / long-form readability */
   .prose-marketing {
     @apply max-w-prose text-neutral-600 leading-relaxed;

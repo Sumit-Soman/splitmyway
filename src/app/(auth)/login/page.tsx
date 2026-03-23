@@ -32,7 +32,7 @@ function LoginForm() {
         <CardDescription className="text-base leading-relaxed">Sign in to continue to SplitMyWay.</CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={action} className="space-y-4">
+        <form action={action} className="space-y-4" data-testid="e2e-login-form">
           <input type="hidden" name="next" value={next} />
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>

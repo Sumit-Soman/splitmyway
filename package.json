@@ -10,7 +10,10 @@
     "lint": "tsc --noEmit",
     "postinstall": "prisma generate",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "SPLITMYWAY_INTEGRATION=1 vitest run tests/integration",
+    "test:e2e": "playwright test --config=tests/e2e/playwright.config.ts",
+    "test:e2e:headed": "playwright test --config=tests/e2e/playwright.config.ts --headed"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -29,10 +32,12 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "dotenv": "^16.4.7",
     "postcss": "^8.4.49",
     "prisma": "^5.22.0",
     "tailwindcss": "^4.2.2",

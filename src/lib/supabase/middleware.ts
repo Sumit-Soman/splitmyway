@@ -33,9 +33,11 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
+  /** Session from cookies — avoids an extra Auth API round-trip vs getUser() on every navigation. */
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
+  const user = session?.user;
 
   const path = request.nextUrl.pathname;
 

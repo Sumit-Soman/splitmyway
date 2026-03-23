@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/auth/server-user";
 import { getRate } from "@/lib/exchange-rates";
 import { calculateSplit } from "@/lib/calculations/splits";
 import { createExpenseSchema } from "@/lib/validations/expense";
@@ -9,15 +9,7 @@ import { ACTIVITY_TYPES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import { Decimal } from "@prisma/client/runtime/library";
 import { revalidatePath } from "next/cache";
-
-async function requireUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-  return user;
-}
+import { removeExpenseAndClearSettlementsIfLedgerEmpty } from "@/lib/ledger/expense-deletion";
 
 export async function createExpense(
   _prev: ActionResult | null,
@@ -187,19 +179,27 @@ export async function deleteExpense(expenseId: string): Promise<ActionResult> {
     return { success: false, error: "Forbidden." };
   }
 
-  await prisma.$transaction([
-    prisma.expense.delete({ where: { id: expenseId } }),
-    prisma.activityLog.create({
+  let clearedSettlements = false;
+  await prisma.$transaction(async (tx) => {
+    clearedSettlements = await removeExpenseAndClearSettlementsIfLedgerEmpty(tx, expenseId, exp.groupId);
+    await tx.activityLog.create({
       data: {
         userId: user.id,
         groupId: exp.groupId,
         type: ACTIVITY_TYPES.EXPENSE_DELETED,
         metadata: { expenseId, description: exp.description },
       },
-    }),
-  ]);
+    });
+  });
 
   revalidatePath(`/groups/${exp.groupId}`);
   revalidatePath("/dashboard");
-  return { success: true };
+  revalidatePath("/settlements");
+  revalidatePath("/groups");
+  return {
+    success: true,
+    message: clearedSettlements
+      ? "This group has no expenses left, so recorded settlements were cleared to keep balances consistent."
+      : undefined,
+  };
 }

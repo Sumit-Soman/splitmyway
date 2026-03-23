@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useActionState, useEffect } from "react";
 import { createGroup } from "@/actions/groups";
 import type { ActionResult } from "@/types";
@@ -14,18 +13,14 @@ import { GROUP_CATEGORIES, CURRENCIES } from "@/lib/constants";
 import { useToast } from "@/components/ui/toast";
 
 export default function NewGroupPage() {
-  const router = useRouter();
   const { toast } = useToast();
   const [state, action, pending] = useActionState(createGroup, null as ActionResult | null);
 
   useEffect(() => {
-    if (state?.success && state.data && typeof state.data === "object" && "id" in state.data) {
-      toast({ title: "Group created" });
-      router.push(`/groups/${(state.data as { id: string }).id}`);
-    } else if (state && !state.success) {
+    if (state && !state.success) {
       toast({ title: "Error", description: state.error, variant: "destructive" });
     }
-  }, [state, router, toast]);
+  }, [state, toast]);
 
   return (
     <Card className="mx-auto max-w-lg border-neutral-200 shadow-sm">

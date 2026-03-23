@@ -36,6 +36,9 @@ prisma/*.db-journal
 # Testing
 coverage
 .vitest
+test-results
+tests/e2e/.env.local
+tests/e2e/report-html
 
 # TypeScript
 next-env.d.ts
