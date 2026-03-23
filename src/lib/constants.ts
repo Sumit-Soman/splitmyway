@@ -19,10 +19,20 @@ export const GROUP_CATEGORIES = [
 
 export const EXPENSE_CATEGORIES = [
   { value: "general", label: "General" },
-  { value: "food", label: "Food & Drink" },
-  { value: "transport", label: "Transport" },
-  { value: "utilities", label: "Utilities" },
+  { value: "food", label: "Food & dining" },
+  { value: "groceries", label: "Groceries" },
+  { value: "drinks", label: "Drinks & nightlife" },
+  { value: "hotel", label: "Hotel & lodging" },
+  { value: "flight", label: "Flights" },
+  { value: "cab", label: "Cab & rideshare" },
+  { value: "transport", label: "Transport & fuel" },
+  { value: "parking", label: "Parking & tolls" },
+  { value: "activities", label: "Activities & tours" },
   { value: "entertainment", label: "Entertainment" },
+  { value: "shopping", label: "Shopping" },
+  { value: "utilities", label: "Utilities" },
+  { value: "health", label: "Health & pharmacy" },
+  { value: "fees", label: "Fees & tips" },
   { value: "other", label: "Other" },
 ] as const;
 
