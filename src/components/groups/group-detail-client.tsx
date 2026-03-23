@@ -529,6 +529,11 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                           </span>
                           <span>{SPLIT_METHODS.find((s) => s.value === e.splitMethod)?.label ?? e.splitMethod}</span>
                         </div>
+                        {e.notes?.trim() ? (
+                          <p className="mt-1.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-neutral-500 sm:text-xs">
+                            {e.notes.trim()}
+                          </p>
+                        ) : null}
                         {e.participants.length > 0 ? (
                           <ul
                             className="mt-2.5 space-y-1 rounded-lg border border-neutral-100 bg-neutral-50/90 px-2.5 py-2"
