@@ -1,5 +1,6 @@
 import { getProfile } from "@/actions/profile";
 import { SettingsForm } from "@/components/settings-form";
+import { ProfileAvatarField } from "@/components/settings/profile-avatar-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function SettingsProfilePage() {
@@ -24,7 +25,13 @@ export default async function SettingsProfilePage() {
             cannot be changed here.
           </CardDescription>
         </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent className="space-y-6 pt-0">
+          <ProfileAvatarField
+            userId={profile.id}
+            name={profile.name}
+            email={profile.email}
+            avatarUrl={profile.avatarUrl}
+          />
           <SettingsForm defaultName={profile.name ?? ""} defaultCurrency={profile.currency} />
         </CardContent>
       </Card>

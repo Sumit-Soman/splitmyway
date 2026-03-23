@@ -6,8 +6,7 @@ import { LogOut, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { logout } from "@/actions/auth";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { getInitials } from "@/lib/utils";
+import { MemberAvatar } from "@/components/shared/member-avatar";
 
 const links = [
   { href: "/dashboard", label: "Dashboard" },
@@ -19,7 +18,7 @@ const links = [
 export function Header({
   user,
 }: {
-  user: { name: string | null; email: string; avatarUrl?: string | null };
+  user: { id: string; name: string | null; email: string; avatarUrl?: string | null };
 }) {
   const pathname = usePathname();
 
@@ -53,9 +52,13 @@ export function Header({
               data-testid="e2e-user-menu"
               className="flex cursor-pointer items-center gap-2 rounded-md p-1 hover:bg-neutral-50"
             >
-              <Avatar className="h-9 w-9">
-                <AvatarFallback>{getInitials(user.name, user.email)}</AvatarFallback>
-              </Avatar>
+              <MemberAvatar
+                userId={user.id}
+                name={user.name}
+                email={user.email}
+                avatarUrl={user.avatarUrl}
+                className="h-9 w-9 text-[10px]"
+              />
               <span className="hidden max-w-[10rem] truncate text-[15px] text-neutral-600 lg:inline">
                 {user.name ?? user.email}
               </span>

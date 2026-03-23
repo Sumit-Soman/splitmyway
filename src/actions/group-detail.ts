@@ -143,8 +143,8 @@ export async function getGroupDetailSerialized(groupId: string) {
       currency: s.currency,
       notes: s.notes,
       settledAt: s.settledAt.toISOString(),
-      from: { name: s.from.name, email: s.from.email },
-      to: { name: s.to.name, email: s.to.email },
+      from: { name: s.from.name, email: s.from.email, avatarUrl: s.from.avatarUrl },
+      to: { name: s.to.name, email: s.to.email, avatarUrl: s.to.avatarUrl },
     })),
   };
 }

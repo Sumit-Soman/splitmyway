@@ -5,10 +5,11 @@ import { ArrowDownLeft, ArrowUpRight, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
-import { MemberAvatar, MemberDot } from "@/components/shared/member-avatar";
+import { MemberAvatar } from "@/components/shared/member-avatar";
 import { cn, formatCurrency } from "@/lib/utils";
 
 type BalanceRow = { userId: string; name: string | null; email: string; balance: number };
+type MemberLite = { userId: string; name: string | null; email: string; avatarUrl: string | null };
 type Suggestion = {
   fromId: string;
   toId: string;
@@ -53,15 +54,21 @@ function LedgerNetAmount({
   );
 }
 
+function memberMeta(members: MemberLite[], userId: string) {
+  return members.find((m) => m.userId === userId);
+}
+
 export function GroupBalancesExplainer({
   groupCurrency,
   currentUserId,
+  members,
   balances,
   suggestions,
   onSettleSuggestion,
 }: {
   groupCurrency: string;
   currentUserId: string;
+  members: MemberLite[];
   balances: BalanceRow[];
   suggestions: Suggestion[];
   onSettleSuggestion: (s: { fromId: string; toId: string; amount: number }) => void;
@@ -144,7 +151,14 @@ export function GroupBalancesExplainer({
                     className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-white px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
                   >
                     <div className="flex min-w-0 gap-3">
-                      <MemberAvatar userId={s.toId} name={s.toName} email="" size="sm" className="shrink-0" />
+                      <MemberAvatar
+                        userId={s.toId}
+                        name={s.toName}
+                        email={memberMeta(members, s.toId)?.email ?? ""}
+                        avatarUrl={memberMeta(members, s.toId)?.avatarUrl}
+                        size="sm"
+                        className="shrink-0"
+                      />
                       <div className="min-w-0 pt-0.5">
                         <p className="text-sm leading-snug text-neutral-900">
                           <span className="text-neutral-500">Pay </span>
@@ -190,7 +204,14 @@ export function GroupBalancesExplainer({
                     className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-white px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
                   >
                     <div className="flex min-w-0 gap-3">
-                      <MemberAvatar userId={s.fromId} name={s.fromName} email="" size="sm" className="shrink-0" />
+                      <MemberAvatar
+                        userId={s.fromId}
+                        name={s.fromName}
+                        email={memberMeta(members, s.fromId)?.email ?? ""}
+                        avatarUrl={memberMeta(members, s.fromId)?.avatarUrl}
+                        size="sm"
+                        className="shrink-0"
+                      />
                       <div className="min-w-0 pt-0.5">
                         <p className="text-sm leading-snug text-neutral-900">
                           <span className="text-neutral-500">Receive from </span>
@@ -243,10 +264,24 @@ export function GroupBalancesExplainer({
                 className="flex flex-col gap-2 rounded-md border border-neutral-100 bg-neutral-50/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-neutral-800">
-                  <MemberDot userId={s.fromId} />
+                  <MemberAvatar
+                    userId={s.fromId}
+                    name={s.fromName}
+                    email={memberMeta(members, s.fromId)?.email ?? ""}
+                    avatarUrl={memberMeta(members, s.fromId)?.avatarUrl}
+                    size="sm"
+                    className="shrink-0"
+                  />
                   <span className="font-medium">{s.fromName}</span>
                   <span className="text-neutral-400">pays</span>
-                  <MemberDot userId={s.toId} />
+                  <MemberAvatar
+                    userId={s.toId}
+                    name={s.toName}
+                    email={memberMeta(members, s.toId)?.email ?? ""}
+                    avatarUrl={memberMeta(members, s.toId)?.avatarUrl}
+                    size="sm"
+                    className="shrink-0"
+                  />
                   <span className="font-medium">{s.toName}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -283,7 +318,14 @@ export function GroupBalancesExplainer({
                 )}
               >
                 <div className="flex min-w-0 items-center gap-2">
-                  <MemberDot userId={b.userId} />
+                  <MemberAvatar
+                    userId={b.userId}
+                    name={b.name}
+                    email={b.email}
+                    avatarUrl={memberMeta(members, b.userId)?.avatarUrl}
+                    size="sm"
+                    className="shrink-0"
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                       <p className="truncate text-sm font-semibold leading-snug text-neutral-900">{b.name ?? b.email}</p>

@@ -225,6 +225,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
             currentUserId={currentUserId}
             members={members}
             expenses={expenses}
+            settlements={settlements.map((s) => ({ fromId: s.fromId, toId: s.toId, amount: s.amount }))}
             balances={balances}
             youPaySuggestions={youPaySuggestions}
             youReceiveSuggestions={youReceiveSuggestions}
@@ -511,6 +512,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                         userId={e.paidBy.id}
                         name={e.paidBy.name}
                         email={e.paidBy.email}
+                        avatarUrl={e.paidBy.avatarUrl}
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -558,6 +560,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
           <GroupBalancesExplainer
             groupCurrency={group.currency}
             currentUserId={currentUserId}
+            members={members}
             balances={balances}
             suggestions={suggestions}
             onSettleSuggestion={(s) => {
@@ -606,7 +609,13 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <MemberAvatar userId={m.userId} name={m.name} email={m.email} size="sm" />
+                      <MemberAvatar
+                        userId={m.userId}
+                        name={m.name}
+                        email={m.email}
+                        avatarUrl={m.avatarUrl}
+                        size="sm"
+                      />
                       <div>
                         <p className="text-sm font-medium text-neutral-800">{m.name ?? m.email}</p>
                         <p className="text-xs text-neutral-500">{m.role}</p>
@@ -684,6 +693,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                               userId={s.fromId}
                               name={s.from.name}
                               email={s.from.email}
+                              avatarUrl={s.from.avatarUrl}
                             />
                             <ArrowRight className="h-3.5 w-3.5 shrink-0 text-neutral-300" strokeWidth={2} />
                             <MemberAvatar
@@ -691,6 +701,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                               userId={s.toId}
                               name={s.to.name}
                               email={s.to.email}
+                              avatarUrl={s.to.avatarUrl}
                             />
                           </div>
                           <div className="min-w-0">

@@ -13,14 +13,16 @@ type Suggestion = {
   toName: string;
 };
 
-type MemberRow = { userId: string; name: string | null; email: string };
+type MemberRow = { userId: string; name: string | null; email: string; avatarUrl?: string | null };
 type ExpenseRow = { paidById: string; amount: number };
+type SettlementRow = { fromId: string; toId: string; amount: number };
 
 export function GroupFinancialSnapshot({
   groupCurrency,
   currentUserId,
   members,
   expenses,
+  settlements,
   balances,
   youPaySuggestions,
   youReceiveSuggestions,
@@ -29,28 +31,46 @@ export function GroupFinancialSnapshot({
   currentUserId: string;
   members: MemberRow[];
   expenses: ExpenseRow[];
+  settlements: SettlementRow[];
   balances: { userId: string; balance: number }[];
   youPaySuggestions: Suggestion[];
   youReceiveSuggestions: Suggestion[];
 }) {
   const yourBalance = balances.find((b) => b.userId === currentUserId)?.balance ?? 0;
 
-  const { totalShared, paidByMember } = useMemo(() => {
+  const { totalShared, totalSettled, paidByMember } = useMemo(() => {
     let total = 0;
     const paid = new Map<string, number>();
-    for (const m of members) paid.set(m.userId, 0);
+    const sent = new Map<string, number>();
+    const received = new Map<string, number>();
+    for (const m of members) {
+      paid.set(m.userId, 0);
+      sent.set(m.userId, 0);
+      received.set(m.userId, 0);
+    }
     for (const e of expenses) {
       total += e.amount;
       paid.set(e.paidById, (paid.get(e.paidById) ?? 0) + e.amount);
     }
+    let settledSum = 0;
+    for (const s of settlements) {
+      settledSum += s.amount;
+      sent.set(s.fromId, (sent.get(s.fromId) ?? 0) + s.amount);
+      received.set(s.toId, (received.get(s.toId) ?? 0) + s.amount);
+    }
     const rows = members
-      .map((m) => ({ member: m, paid: paid.get(m.userId) ?? 0 }))
+      .map((m) => ({
+        member: m,
+        paid: paid.get(m.userId) ?? 0,
+        settledSent: sent.get(m.userId) ?? 0,
+        settledReceived: received.get(m.userId) ?? 0,
+      }))
       .sort(
         (a, b) =>
           b.paid - a.paid || (a.member.name ?? a.member.email).localeCompare(b.member.name ?? b.member.email)
       );
-    return { totalShared: total, paidByMember: rows };
-  }, [members, expenses]);
+    return { totalShared: total, totalSettled: settledSum, paidByMember: rows };
+  }, [members, expenses, settlements]);
 
   const hasExpenses = expenses.length > 0;
 
@@ -58,7 +78,7 @@ export function GroupFinancialSnapshot({
     return (
       <div className="max-w-4xl rounded-2xl border border-neutral-200/60 bg-neutral-50/40 px-5 py-6 sm:px-6">
         <p className="text-sm text-neutral-500">
-          Add an expense to see balances, who paid what, and how to settle up.
+          Add an expense to see balances, who paid what, settlements, and how to settle up.
         </p>
       </div>
     );
@@ -139,21 +159,48 @@ export function GroupFinancialSnapshot({
         <div className="lg:border-l lg:border-neutral-100 lg:pl-10">
           <p className="mb-3 text-xs font-medium text-neutral-400">Paid out (who covered bills)</p>
           <ul className="flex flex-col gap-2" aria-label="Total paid per member">
-            {paidByMember.map(({ member, paid }) => (
-              <li key={member.userId} className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <MemberAvatar size="sm" userId={member.userId} name={member.name} email={member.email} />
-                  <span className="truncate text-sm text-neutral-800">{member.name ?? member.email}</span>
-                </div>
-                <span className="shrink-0 tabular-nums text-sm font-medium text-neutral-900">
-                  {formatCurrency(paid, groupCurrency)}
-                </span>
-              </li>
-            ))}
+            {paidByMember.map(({ member, paid, settledSent, settledReceived }) => {
+              const hasSett =
+                settledSent > 0.004 || settledReceived > 0.004;
+              return (
+                <li key={member.userId} className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <MemberAvatar
+                      size="sm"
+                      userId={member.userId}
+                      name={member.name}
+                      email={member.email}
+                      avatarUrl={member.avatarUrl}
+                    />
+                    <span className="truncate text-sm text-neutral-800">{member.name ?? member.email}</span>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span className="block tabular-nums text-sm font-medium text-neutral-900">
+                      {formatCurrency(paid, groupCurrency)}
+                    </span>
+                    {hasSett ? (
+                      <span className="mt-0.5 block text-[11px] tabular-nums text-neutral-400">
+                        {settledSent > 0.004 ? `−${formatCurrency(settledSent, groupCurrency)} sent` : null}
+                        {settledSent > 0.004 && settledReceived > 0.004 ? " · " : null}
+                        {settledReceived > 0.004 ? `+${formatCurrency(settledReceived, groupCurrency)} recv` : null}
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
           <p className="mt-4 text-xs text-neutral-400">
-            {formatCurrency(totalShared, groupCurrency)} total · {expenses.length}{" "}
-            {expenses.length === 1 ? "expense" : "expenses"}
+            <span className="tabular-nums text-neutral-600">{formatCurrency(totalShared, groupCurrency)}</span>{" "}
+            expenses ·{" "}
+            <span className="tabular-nums text-neutral-600">{formatCurrency(totalSettled, groupCurrency)}</span>{" "}
+            settled
+            {settlements.length > 0 ? (
+              <>
+                {" "}
+                · {settlements.length} {settlements.length === 1 ? "payment" : "payments"}
+              </>
+            ) : null}
           </p>
         </div>
       </div>
