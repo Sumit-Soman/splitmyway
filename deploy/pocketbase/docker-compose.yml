@@ -1,0 +1,15 @@
+# Run on any VPS with Docker: HTTPS should terminate in front (Caddy, nginx, Cloudflare, etc.).
+# From repo root: docker compose -f deploy/pocketbase/docker-compose.yml up -d
+services:
+  pocketbase:
+    build:
+      context: ../..
+      dockerfile: deploy/pocketbase/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - pb_data:/pb/pb_data
+
+volumes:
+  pb_data:

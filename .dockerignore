@@ -1,0 +1,11 @@
+# Slim context for deploy/pocketbase/Dockerfile builds (repo root as context)
+node_modules
+.next
+out
+.git
+pb_data
+tools/pocketbase
+coverage
+test-results
+tests/e2e/report-html
+*.md

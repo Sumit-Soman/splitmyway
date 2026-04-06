@@ -1,0 +1,29 @@
+# Fly.io: HTTPS + persistent disk for pb_data.
+# 1) Install CLI: https://fly.io/docs/hands-on/install-flyctl/
+# 2) fly auth login
+# 3) fly apps create YOUR_APP_NAME   # or rename `app` below (must be globally unique)
+# 4) fly volumes create pb_data --region iad --size 1   # pick region near you / Vercel
+# 5) From repo root: fly deploy --config deploy/pocketbase/fly.toml
+#
+# Set POCKETBASE_URL in Vercel to https://YOUR_APP_NAME.fly.dev (or your custom domain).
+
+app = "splitmyway-pocketbase"
+primary_region = "iad"
+
+[build]
+  dockerfile = "deploy/pocketbase/Dockerfile"
+
+[http_service]
+  internal_port = 8090
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+
+[[vm]]
+  memory = "256mb"
+  cpus = 1
+
+[mounts]
+  source = "pb_data"
+  destination = "/pb/pb_data"
+  initial_size = "1gb"
