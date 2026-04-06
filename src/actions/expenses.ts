@@ -1,15 +1,17 @@
 "use server";
 
-import { prisma } from "@/lib/prisma";
+import { getAdminPb } from "@/lib/pocketbase/admin";
 import { requireUser } from "@/lib/auth/server-user";
 import { getRate } from "@/lib/exchange-rates";
 import { calculateSplit } from "@/lib/calculations/splits";
 import { createExpenseSchema, updateExpenseSchema } from "@/lib/validations/expense";
-import { ACTIVITY_TYPES } from "@/lib/constants";
+import { ACTIVITY_TYPES, MAX_EXPENSE_ATTACHMENT_BYTES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
-import { Decimal } from "@prisma/client/runtime/library";
+import Decimal from "decimal.js";
 import { revalidatePath } from "next/cache";
 import { removeExpenseAndClearSettlementsIfLedgerEmpty } from "@/lib/ledger/expense-deletion";
+import { escapeFilterValue } from "@/lib/pocketbase/filter-escape";
+import { recordField } from "@/lib/pocketbase/record-field";
 
 export async function createExpense(
   _prev: ActionResult | null,
@@ -58,41 +60,40 @@ export async function createExpense(
     };
   }
 
-  const group = await prisma.group.findUnique({
-    where: { id: parsed.data.groupId },
-    include: { members: true },
+  const pb = await getAdminPb();
+  const group = await pb.collection("groups").getOne(parsed.data.groupId);
+  const memRows = await pb.collection("group_members").getFullList({
+    filter: `group = "${escapeFilterValue(parsed.data.groupId)}"`,
   });
-  if (!group) {
-    return { success: false, error: "Group not found." };
-  }
+  const memberIdsSet = new Set(
+    memRows.map((m) => String(recordField(m, "user") ?? "")).filter(Boolean)
+  );
 
-  const isMember = group.members.some((m) => m.userId === user.id);
-  if (!isMember) {
+  if (!memberIdsSet.has(user.id)) {
     return { success: false, error: "Not a member of this group." };
   }
 
-  const memberIds = new Set(group.members.map((m) => m.userId));
   for (const pid of parsed.data.participantIds) {
-    if (!memberIds.has(pid)) {
+    if (!memberIdsSet.has(pid)) {
       return { success: false, error: "All participants must be group members." };
     }
   }
 
   const inputAmount = parsed.data.amount;
   const expenseCurrency = parsed.data.currency.toUpperCase();
-  const groupCurrency = group.currency.toUpperCase();
+  const groupCurrency = String(recordField(group, "currency") ?? "").toUpperCase();
 
   let convertedAmount = inputAmount;
-  let originalAmount: Decimal | null = null;
+  let originalAmount: string | null = null;
   let originalCurrency: string | null = null;
-  let exchangeRate: Decimal | null = null;
+  let exchangeRate: string | null = null;
 
   if (expenseCurrency !== groupCurrency) {
     const rate = await getRate(expenseCurrency, groupCurrency);
     convertedAmount = Math.round(inputAmount * rate * 100) / 100;
-    originalAmount = new Decimal(inputAmount.toFixed(2));
+    originalAmount = new Decimal(inputAmount.toFixed(2)).toFixed(2);
     originalCurrency = expenseCurrency;
-    exchangeRate = new Decimal(rate.toFixed(8));
+    exchangeRate = new Decimal(rate.toFixed(8)).toFixed(8);
   }
 
   const split = calculateSplit({
@@ -108,55 +109,65 @@ export async function createExpense(
     return { success: false, error: split.error };
   }
 
-  await prisma.$transaction(async (tx) => {
-    const expense = await tx.expense.create({
-      data: {
-        groupId: parsed.data.groupId,
-        paidById: parsed.data.paidById,
-        description: parsed.data.description,
-        amount: new Decimal(convertedAmount.toFixed(2)),
-        currency: groupCurrency,
-        originalAmount,
-        originalCurrency,
-        exchangeRate,
-        category: parsed.data.category,
-        date: parsed.data.date,
-        notes: parsed.data.notes,
-        splitMethod: parsed.data.splitMethod,
-      },
-    });
+  const recordFields = {
+    group: parsed.data.groupId,
+    paid_by: parsed.data.paidById,
+    description: parsed.data.description,
+    amount: new Decimal(convertedAmount.toFixed(2)).toFixed(2),
+    currency: groupCurrency,
+    original_amount: originalAmount ?? "",
+    original_currency: originalCurrency ?? "",
+    exchange_rate: exchangeRate ?? "",
+    category: parsed.data.category,
+    date: parsed.data.date.toISOString(),
+    notes: parsed.data.notes ?? "",
+    split_method: parsed.data.splitMethod,
+  };
 
-    for (const [uid, amt] of Object.entries(split.amounts)) {
-      await tx.expenseParticipant.create({
-        data: {
-          expenseId: expense.id,
-          userId: uid,
-          amount: new Decimal(amt.toFixed(2)),
-          shares:
-            parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
-              ? Math.floor(parsed.data.shares[uid])
-              : null,
-          percentage:
-            parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
-              ? new Decimal(parsed.data.percentages[uid]!.toFixed(2))
-              : null,
-        },
-      });
+  const att = formData.get("attachment");
+  let expense: { id: string };
+  if (att instanceof File && att.size > 0) {
+    if (att.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
+      return { success: false, error: "Attachment must be 15 MB or smaller." };
     }
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(recordFields)) {
+      fd.append(k, v);
+    }
+    fd.append("attachment", att);
+    expense = await pb.collection("expenses").create(fd);
+  } else {
+    expense = await pb.collection("expenses").create(recordFields);
+  }
 
-    await tx.activityLog.create({
-      data: {
-        userId: user.id,
-        groupId: parsed.data.groupId,
-        type: ACTIVITY_TYPES.EXPENSE_ADDED,
-        metadata: {
-          expenseId: expense.id,
-          description: parsed.data.description,
-          amount: convertedAmount,
-          currency: groupCurrency,
-        },
-      },
+  for (const [uid, amt] of Object.entries(split.amounts)) {
+    const shareVal =
+      parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
+        ? Math.floor(parsed.data.shares[uid])
+        : null;
+    const pctVal =
+      parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
+        ? new Decimal(parsed.data.percentages[uid]!.toFixed(2)).toFixed(2)
+        : "";
+    await pb.collection("expense_participants").create({
+      expense: expense.id,
+      user: uid,
+      amount: new Decimal(amt.toFixed(2)).toFixed(2),
+      shares: shareVal ?? undefined,
+      percentage: pctVal || "",
     });
+  }
+
+  await pb.collection("activity_logs").create({
+    user: user.id,
+    group: parsed.data.groupId,
+    type: ACTIVITY_TYPES.EXPENSE_ADDED,
+    metadata: {
+      expenseId: expense.id,
+      description: parsed.data.description,
+      amount: convertedAmount,
+      currency: groupCurrency,
+    },
   });
 
   revalidatePath(`/groups/${parsed.data.groupId}`);
@@ -212,45 +223,47 @@ export async function updateExpense(
     };
   }
 
-  const existing = await prisma.expense.findUnique({
-    where: { id: parsed.data.expenseId },
-    include: { group: { include: { members: true } } },
+  const pb = await getAdminPb();
+  const existing = await pb.collection("expenses").getOne(parsed.data.expenseId, {
+    expand: "group",
   });
-  if (!existing) {
-    return { success: false, error: "Expense not found." };
-  }
-  if (existing.groupId !== parsed.data.groupId) {
+  if (String(recordField(existing, "group") ?? "") !== parsed.data.groupId) {
     return { success: false, error: "Expense does not belong to this group." };
   }
 
-  const group = existing.group;
-  const isMember = group.members.some((m) => m.userId === user.id);
-  if (!isMember) {
+  const group = await pb.collection("groups").getOne(parsed.data.groupId);
+  const memRows = await pb.collection("group_members").getFullList({
+    filter: `group = "${escapeFilterValue(parsed.data.groupId)}"`,
+  });
+  const memberIdsSet = new Set(
+    memRows.map((m) => String(recordField(m, "user") ?? "")).filter(Boolean)
+  );
+
+  if (!memberIdsSet.has(user.id)) {
     return { success: false, error: "Not a member of this group." };
   }
 
-  const memberIds = new Set(group.members.map((m) => m.userId));
   for (const pid of parsed.data.participantIds) {
-    if (!memberIds.has(pid)) {
+    if (!memberIdsSet.has(pid)) {
       return { success: false, error: "All participants must be group members." };
     }
   }
 
   const inputAmount = parsed.data.amount;
   const expenseCurrency = parsed.data.currency.toUpperCase();
-  const groupCurrency = group.currency.toUpperCase();
+  const groupCurrency = String(recordField(group, "currency") ?? "").toUpperCase();
 
   let convertedAmount = inputAmount;
-  let originalAmount: Decimal | null = null;
+  let originalAmount: string | null = null;
   let originalCurrency: string | null = null;
-  let exchangeRate: Decimal | null = null;
+  let exchangeRate: string | null = null;
 
   if (expenseCurrency !== groupCurrency) {
     const rate = await getRate(expenseCurrency, groupCurrency);
     convertedAmount = Math.round(inputAmount * rate * 100) / 100;
-    originalAmount = new Decimal(inputAmount.toFixed(2));
+    originalAmount = new Decimal(inputAmount.toFixed(2)).toFixed(2);
     originalCurrency = expenseCurrency;
-    exchangeRate = new Decimal(rate.toFixed(8));
+    exchangeRate = new Decimal(rate.toFixed(8)).toFixed(8);
   }
 
   const split = calculateSplit({
@@ -266,57 +279,77 @@ export async function updateExpense(
     return { success: false, error: split.error };
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.expenseParticipant.deleteMany({ where: { expenseId: parsed.data.expenseId } });
+  const parts = await pb.collection("expense_participants").getFullList({
+    filter: `expense = "${escapeFilterValue(parsed.data.expenseId)}"`,
+  });
+  for (const p of parts) {
+    await pb.collection("expense_participants").delete(p.id);
+  }
 
-    await tx.expense.update({
-      where: { id: parsed.data.expenseId },
-      data: {
-        paidById: parsed.data.paidById,
-        description: parsed.data.description,
-        amount: new Decimal(convertedAmount.toFixed(2)),
-        currency: groupCurrency,
-        originalAmount,
-        originalCurrency,
-        exchangeRate,
-        category: parsed.data.category,
-        date: parsed.data.date,
-        notes: parsed.data.notes,
-        splitMethod: parsed.data.splitMethod,
-      },
-    });
+  const updateFields = {
+    paid_by: parsed.data.paidById,
+    description: parsed.data.description,
+    amount: new Decimal(convertedAmount.toFixed(2)).toFixed(2),
+    currency: groupCurrency,
+    original_amount: originalAmount ?? "",
+    original_currency: originalCurrency ?? "",
+    exchange_rate: exchangeRate ?? "",
+    category: parsed.data.category,
+    date: parsed.data.date.toISOString(),
+    notes: parsed.data.notes ?? "",
+    split_method: parsed.data.splitMethod,
+  };
 
-    for (const [uid, amt] of Object.entries(split.amounts)) {
-      await tx.expenseParticipant.create({
-        data: {
-          expenseId: parsed.data.expenseId,
-          userId: uid,
-          amount: new Decimal(amt.toFixed(2)),
-          shares:
-            parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
-              ? Math.floor(parsed.data.shares[uid])
-              : null,
-          percentage:
-            parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
-              ? new Decimal(parsed.data.percentages[uid]!.toFixed(2))
-              : null,
-        },
-      });
+  const newAtt = formData.get("attachment");
+  const removeAttachment = formData.get("removeAttachment") === "1";
+
+  if (newAtt instanceof File && newAtt.size > 0) {
+    if (newAtt.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
+      return { success: false, error: "Attachment must be 15 MB or smaller." };
     }
-
-    await tx.activityLog.create({
-      data: {
-        userId: user.id,
-        groupId: parsed.data.groupId,
-        type: ACTIVITY_TYPES.EXPENSE_UPDATED,
-        metadata: {
-          expenseId: parsed.data.expenseId,
-          description: parsed.data.description,
-          amount: convertedAmount,
-          currency: groupCurrency,
-        },
-      },
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(updateFields)) {
+      fd.append(k, v);
+    }
+    fd.append("attachment", newAtt);
+    await pb.collection("expenses").update(parsed.data.expenseId, fd);
+  } else if (removeAttachment) {
+    await pb.collection("expenses").update(parsed.data.expenseId, {
+      ...updateFields,
+      attachment: "",
     });
+  } else {
+    await pb.collection("expenses").update(parsed.data.expenseId, updateFields);
+  }
+
+  for (const [uid, amt] of Object.entries(split.amounts)) {
+    const shareVal =
+      parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
+        ? Math.floor(parsed.data.shares[uid])
+        : null;
+    const pctVal =
+      parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
+        ? new Decimal(parsed.data.percentages[uid]!.toFixed(2)).toFixed(2)
+        : "";
+    await pb.collection("expense_participants").create({
+      expense: parsed.data.expenseId,
+      user: uid,
+      amount: new Decimal(amt.toFixed(2)).toFixed(2),
+      shares: shareVal ?? undefined,
+      percentage: pctVal || "",
+    });
+  }
+
+  await pb.collection("activity_logs").create({
+    user: user.id,
+    group: parsed.data.groupId,
+    type: ACTIVITY_TYPES.EXPENSE_UPDATED,
+    metadata: {
+      expenseId: parsed.data.expenseId,
+      description: parsed.data.description,
+      amount: convertedAmount,
+      currency: groupCurrency,
+    },
   });
 
   revalidatePath(`/groups/${parsed.data.groupId}`);
@@ -326,33 +359,26 @@ export async function updateExpense(
 
 export async function deleteExpense(expenseId: string): Promise<ActionResult> {
   const user = await requireUser();
-  const exp = await prisma.expense.findUnique({
-    where: { id: expenseId },
-    include: { group: { include: { members: true } } },
+  const pb = await getAdminPb();
+  const exp = await pb.collection("expenses").getOne(expenseId);
+  const groupId = String(recordField(exp, "group") ?? "");
+  const memRows = await pb.collection("group_members").getFullList({
+    filter: `group = "${escapeFilterValue(groupId)}"`,
   });
-  if (!exp) {
-    return { success: false, error: "Expense not found." };
-  }
-
-  const isMember = exp.group.members.some((m) => m.userId === user.id);
-  if (!isMember) {
+  if (!memRows.some((m) => String(recordField(m, "user") ?? "") === user.id)) {
     return { success: false, error: "Forbidden." };
   }
 
-  let clearedSettlements = false;
-  await prisma.$transaction(async (tx) => {
-    clearedSettlements = await removeExpenseAndClearSettlementsIfLedgerEmpty(tx, expenseId, exp.groupId);
-    await tx.activityLog.create({
-      data: {
-        userId: user.id,
-        groupId: exp.groupId,
-        type: ACTIVITY_TYPES.EXPENSE_DELETED,
-        metadata: { expenseId, description: exp.description },
-      },
-    });
+  const clearedSettlements = await removeExpenseAndClearSettlementsIfLedgerEmpty(expenseId, groupId);
+
+  await pb.collection("activity_logs").create({
+    user: user.id,
+    group: groupId,
+    type: ACTIVITY_TYPES.EXPENSE_DELETED,
+    metadata: { expenseId, description: String(recordField(exp, "description") ?? "") },
   });
 
-  revalidatePath(`/groups/${exp.groupId}`);
+  revalidatePath(`/groups/${groupId}`);
   revalidatePath("/dashboard");
   revalidatePath("/settlements");
   revalidatePath("/groups");

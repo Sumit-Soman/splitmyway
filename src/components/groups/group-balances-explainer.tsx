@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { ArrowDownLeft, ArrowUpRight, Info } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CurrencyDisplay } from "@/components/shared/currency-display";
@@ -238,15 +238,6 @@ export function GroupBalancesExplainer({
             )}
           </div>
         </div>
-
-        <div className="app-footnote-row">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" aria-hidden />
-          <p className="text-xs leading-snug text-neutral-600">
-            <span className="font-medium text-neutral-800">How this works:</span> We compute each person&apos;s net
-            balance from expenses and settlements, then suggest the smallest set of payments so all nets go to
-            zero. Your &ldquo;outgoing&rdquo; and &ldquo;incoming&rdquo; lists are only the lines where you appear.
-          </p>
-        </div>
       </div>
 
       {/* Full plan */}
@@ -295,7 +286,7 @@ export function GroupBalancesExplainer({
                 <div className="flex items-center gap-2">
                   <span className="text-sm tabular-nums text-neutral-700">{formatCurrency(s.amount, groupCurrency)}</span>
                   <Button type="button" size="sm" variant="secondary" onClick={() => onSettleSuggestion(s)}>
-                    Record
+                    Settle
                   </Button>
                 </div>
               </div>
@@ -309,8 +300,8 @@ export function GroupBalancesExplainer({
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Member ledger</CardTitle>
           <CardDescription>
-            Each person&apos;s net in {groupCurrency}. Positive = the group still owes them; negative = they still
-            owe the group. Your row uses color to show owe vs owed.
+            Each person&apos;s net in {groupCurrency}. Positive = the group still owes them; negative = they still owe
+            the group. Your row uses color to show owe vs owed.
           </CardDescription>
         </CardHeader>
         <CardContent className="rounded-md border border-neutral-100 p-0">
@@ -345,19 +336,6 @@ export function GroupBalancesExplainer({
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-0.5 text-xs leading-snug text-neutral-500">
-                      {isYou
-                        ? myNet > 0
-                          ? "Net: group owes you"
-                          : myNet < 0
-                            ? "Net: you owe the group"
-                            : "Net: even"
-                        : b.balance > 0
-                          ? "Net creditor in this group"
-                          : b.balance < 0
-                            ? "Net debtor in this group"
-                            : "Net: even"}
-                    </p>
                   </div>
                 </div>
                 <div

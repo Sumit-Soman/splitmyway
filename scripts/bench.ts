@@ -1,10 +1,20 @@
 /**
- * Measures DB-heavy paths (same shapes as dashboard + createGroup).
+ * Measures DB-heavy paths (dashboard-style loads + create group).
  * Run: npx tsx --env-file=.env scripts/bench.ts
  */
-import { PrismaClient } from "@prisma/client";
+import PocketBase from "pocketbase";
+import { loadGroupsDataForUser } from "../src/lib/pocketbase/queries";
 
-const prisma = new PrismaClient();
+async function getAdminPb() {
+  const url = process.env.POCKETBASE_URL;
+  if (!url) throw new Error("POCKETBASE_URL");
+  const pb = new PocketBase(url);
+  await pb.admins.authWithPassword(
+    process.env.POCKETBASE_ADMIN_EMAIL!,
+    process.env.POCKETBASE_ADMIN_PASSWORD!
+  );
+  return pb;
+}
 
 async function time<T>(label: string, fn: () => Promise<T>): Promise<T> {
   const t0 = performance.now();
@@ -16,78 +26,64 @@ async function time<T>(label: string, fn: () => Promise<T>): Promise<T> {
 }
 
 async function main() {
-  const user = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  const pb = await getAdminPb();
+  const users = await pb.collection("users").getList(1, 1, { sort: "created" });
+  const user = users.items[0];
   if (!user) {
-    console.log("No users in DB — seed or sign up once, then re-run.");
+    console.log("No users in PocketBase — seed or sign up once, then re-run.");
     process.exit(1);
   }
 
   console.log(`\nBenchmark (user ${user.email})\n`);
 
-  await time("Dashboard-style group.findMany (full include)", () =>
-    prisma.group.findMany({
-      where: { members: { some: { userId: user.id } } },
-      include: {
-        members: { include: { user: true } },
-        expenses: { include: { participants: true } },
-        settlements: true,
-      },
-    })
-  );
+  await time("loadGroupsDataForUser", () => loadGroupsDataForUser(user.id));
 
-  await time("Activity: memberships + activityLog", async () => {
-    const memberships = await prisma.groupMember.findMany({
-      where: { userId: user.id },
-      select: { groupId: true },
+  await time("getRecentActivity", async () => {
+    // Uses getAuthUser internally — won't work without cookies; measure query path only:
+    const memberships = await pb.collection("group_members").getFullList({
+      filter: `user = "${user.id}"`,
     });
-    const groupIds = memberships.map((m) => m.groupId);
-    return prisma.activityLog.findMany({
-      where: {
-        OR: [{ userId: user.id }, { groupId: { in: groupIds } }],
-      },
-      include: {
-        user: { select: { name: true, email: true } },
-        group: { select: { name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 10,
+    const groupIds = memberships.map((m) => m.get("group") as string);
+    const orGroups =
+      groupIds.length === 0
+        ? ""
+        : groupIds.length === 1
+          ? `group = "${groupIds[0]}"`
+          : `(${groupIds.map((id) => `group = "${id}"`).join(" || ")})`;
+    const filter = groupIds.length === 0 ? `user = "${user.id}"` : `(user = "${user.id}" || ${orGroups})`;
+    return pb.collection("activity_logs").getFullList({
+      filter,
+      sort: "-created",
+      perPage: 10,
+      expand: "user,group",
     });
   });
 
   const slug = `bench-${Date.now()}`;
-  await time("createGroup-style transaction", () =>
-    prisma.$transaction(async (tx) => {
-      const g = await tx.group.create({
-        data: {
-          name: slug,
-          description: "benchmark",
-          category: "other",
-          currency: "USD",
-        },
-      });
-      await tx.groupMember.create({
-        data: { userId: user.id, groupId: g.id, role: "admin" },
-      });
-      await tx.activityLog.create({
-        data: {
-          userId: user.id,
-          groupId: g.id,
-          type: "group_created",
-          metadata: { groupName: g.name },
-        },
-      });
-      return g;
-    })
-  );
-
-  const created = await prisma.group.findFirst({ where: { name: slug } });
-  if (created) {
-    await prisma.group.delete({ where: { id: created.id } });
+  await time("createGroup-style writes", async () => {
+    const g = await pb.collection("groups").create({
+      name: slug,
+      description: "benchmark",
+      category: "other",
+      currency: "USD",
+    });
+    await pb.collection("group_members").create({
+      user: user.id,
+      group: g.id,
+      role: "admin",
+      joined_at: new Date().toISOString(),
+    });
+    await pb.collection("activity_logs").create({
+      user: user.id,
+      group: g.id,
+      type: "group_created",
+      metadata: { groupName: g.get("name") },
+    });
+    await pb.collection("groups").delete(g.id);
     console.log("  (removed benchmark group)");
-  }
+  });
 
   console.log("");
-  await prisma.$disconnect();
 }
 
 main().catch((e) => {

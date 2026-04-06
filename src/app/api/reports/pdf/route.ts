@@ -1,7 +1,7 @@
 import { getAuthUser } from "@/lib/auth/server-user";
-import { prisma } from "@/lib/prisma";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
+import { listMembershipsForUser, loadGroupsExportData } from "@/lib/pocketbase/queries";
 
 export async function GET(request: Request) {
   const user = await getAuthUser();
@@ -12,10 +12,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const groupId = searchParams.get("groupId");
 
-  const memberships = await prisma.groupMember.findMany({
-    where: { userId: user.id },
-    select: { groupId: true },
-  });
+  const memberships = await listMembershipsForUser(user.id);
   const allowed = new Set(memberships.map((m) => m.groupId));
   const groupIds = groupId ? (allowed.has(groupId) ? [groupId] : []) : [...allowed];
 
@@ -23,17 +20,7 @@ export async function GET(request: Request) {
     return new Response("No data", { status: 404 });
   }
 
-  const groups = await prisma.group.findMany({
-    where: { id: { in: groupIds } },
-    include: {
-      members: { include: { user: true } },
-      expenses: {
-        include: { paidBy: true, participants: { include: { user: true } } },
-        orderBy: { date: "desc" },
-      },
-      settlements: { include: { from: true, to: true }, orderBy: { settledAt: "desc" } },
-    },
-  });
+  const groups = await loadGroupsExportData(user.id, groupIds);
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -62,7 +49,7 @@ export async function GET(request: Request) {
       const bal = calculateBalances({
         memberIds,
         expenses: g.expenses.map((e) => ({
-          paidById: e.paidById,
+          paidById: e.paidBy.id,
           participants: e.participants.map((p) => ({
             userId: p.userId,
             amount: toNumber(p.amount),

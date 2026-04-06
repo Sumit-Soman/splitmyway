@@ -43,6 +43,12 @@ export const SPLIT_METHODS = [
   { value: "shares", label: "Shares" },
 ] as const;
 
+/** Profile photo uploads (server + client checks). */
+export const MAX_PROFILE_AVATAR_BYTES = 2 * 1024 * 1024;
+
+/** Expense receipt / attachment uploads (must stay within PocketBase file field max). */
+export const MAX_EXPENSE_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+
 export const ACTIVITY_TYPES = {
   EXPENSE_ADDED: "expense_added",
   EXPENSE_UPDATED: "expense_updated",

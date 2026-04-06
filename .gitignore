@@ -29,9 +29,9 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
-# Prisma
-prisma/*.db
-prisma/*.db-journal
+# PocketBase local data + downloaded CLI (see README or docker-compose)
+pb_data/
+tools/pocketbase
 
 # Testing
 coverage

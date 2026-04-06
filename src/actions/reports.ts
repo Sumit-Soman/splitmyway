@@ -1,9 +1,10 @@
 "use server";
 
-import { prisma } from "@/lib/prisma";
 import { getAuthUser } from "@/lib/auth/server-user";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
+import { recordField } from "@/lib/pocketbase/record-field";
+import { listMembershipsForUser, loadGroupsExportData } from "@/lib/pocketbase/queries";
 
 type GroupReportSection = {
   groupId: string;
@@ -51,10 +52,7 @@ export async function getReportData(groupId: string | null) {
   const user = await getAuthUser();
   if (!user) return null;
 
-  const memberships = await prisma.groupMember.findMany({
-    where: { userId: user.id },
-    include: { group: true },
-  });
+  const memberships = await listMembershipsForUser(user.id);
   if (memberships.length === 0) {
     return {
       groups: [] as Array<{ id: string; name: string; currency: string }>,
@@ -63,39 +61,25 @@ export async function getReportData(groupId: string | null) {
     };
   }
 
+  const groupPicker = memberships.map((m) => ({
+    id: m.groupId,
+    name: String(recordField(m.group, "name") ?? ""),
+    currency: String(recordField(m.group, "currency") ?? "USD"),
+  }));
+
   const selectedIds = groupId
     ? memberships.filter((m) => m.groupId === groupId).map((m) => m.groupId)
     : memberships.map((m) => m.groupId);
 
   if (selectedIds.length === 0) {
     return {
-      groups: memberships.map((m) => ({
-        id: m.group.id,
-        name: m.group.name,
-        currency: m.group.currency,
-      })),
+      groups: groupPicker,
       sections: [] as GroupReportSection[],
       summary: { totalSpend: 0, expenseCount: 0, groupCount: 0, peopleCount: 0 },
     };
   }
 
-  const groupsData = await prisma.group.findMany({
-    where: { id: { in: selectedIds } },
-    include: {
-      members: { include: { user: true } },
-      expenses: {
-        include: {
-          paidBy: true,
-          participants: { include: { user: true } },
-        },
-        orderBy: { date: "desc" },
-      },
-      settlements: {
-        include: { from: true, to: true },
-        orderBy: { settledAt: "desc" },
-      },
-    },
-  });
+  const groupsData = await loadGroupsExportData(user.id, selectedIds);
 
   let totalSpend = 0;
   let expenseCount = 0;
@@ -107,7 +91,7 @@ export async function getReportData(groupId: string | null) {
     const balancesMap = calculateBalances({
       memberIds,
       expenses: g.expenses.map((e) => ({
-        paidById: e.paidById,
+        paidById: e.paidBy.id,
         participants: e.participants.map((p) => ({
           userId: p.userId,
           amount: toNumber(p.amount),
@@ -139,9 +123,9 @@ export async function getReportData(groupId: string | null) {
         description: e.description,
         amount: toNumber(e.amount),
         currency: e.currency,
-        originalAmount: e.originalAmount != null ? toNumber(e.originalAmount) : null,
+        originalAmount: e.originalAmount ? toNumber(e.originalAmount) : null,
         originalCurrency: e.originalCurrency,
-        exchangeRate: e.exchangeRate != null ? toNumber(e.exchangeRate) : null,
+        exchangeRate: e.exchangeRate ? toNumber(e.exchangeRate) : null,
         category: e.category,
         date: e.date.toISOString(),
         splitMethod: e.splitMethod,
@@ -187,11 +171,7 @@ export async function getReportData(groupId: string | null) {
   });
 
   return {
-    groups: memberships.map((m) => ({
-      id: m.group.id,
-      name: m.group.name,
-      currency: m.group.currency,
-    })),
+    groups: groupPicker,
     sections,
     summary: {
       totalSpend,

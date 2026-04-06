@@ -1,6 +1,8 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import PocketBase, { ClientResponseError } from "pocketbase";
+import { getPocketBaseUrl } from "@/lib/pocketbase/server";
+import { clearPbAuthCookie, setPbAuthCookie } from "@/lib/pocketbase/cookies";
 import { getAuthUser } from "@/lib/auth/server-user";
 import { ensureAppUserForAuth } from "@/lib/auth/ensure-app-user";
 import {
@@ -11,6 +13,7 @@ import {
 } from "@/lib/validations/auth";
 import type { ActionResult } from "@/types";
 import { redirect, unstable_rethrow } from "next/navigation";
+import { createUserPbFromCookies } from "@/lib/pocketbase/server";
 
 export async function login(
   _prevState: ActionResult | null,
@@ -30,20 +33,24 @@ export async function login(
   }
 
   try {
-    const supabase = await createClient();
-    const { data: signInData, error } = await supabase.auth.signInWithPassword({
-      email: parsed.data.email,
-      password: parsed.data.password,
-    });
-    if (error) {
-      return { success: false, error: error.message };
-    }
-    if (signInData.user) {
-      await ensureAppUserForAuth(signInData.user);
+    const pb = new PocketBase(getPocketBaseUrl());
+    const password = parsed.data.password.trim();
+    await pb.collection("users").authWithPassword(parsed.data.email, password);
+    await setPbAuthCookie(pb);
+    if (pb.authStore.record) {
+      await ensureAppUserForAuth(pb.authStore.record);
     }
   } catch (e) {
     unstable_rethrow(e);
-    throw e;
+    if (e instanceof ClientResponseError) {
+      const msg =
+        (e.response as { message?: string } | undefined)?.message ??
+        e.message ??
+        "Sign in failed.";
+      return { success: false, error: msg };
+    }
+    const err = e as { message?: string };
+    return { success: false, error: err.message ?? "Sign in failed." };
   }
 
   const next = String(formData.get("next") ?? "") || "/dashboard";
@@ -70,40 +77,32 @@ export async function signup(
   }
 
   try {
-    const supabase = await createClient();
-    const { data, error } = await supabase.auth.signUp({
+    const pb = new PocketBase(getPocketBaseUrl());
+    await pb.collection("users").create({
       email: parsed.data.email,
       password: parsed.data.password,
-      options: {
-        data: { name: parsed.data.name },
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/callback`,
-      },
+      passwordConfirm: parsed.data.password,
+      name: parsed.data.name,
+      currency: "USD",
     });
-    if (error) {
-      return { success: false, error: error.message };
-    }
-    const userId = data.user?.id;
-    if (!userId) {
-      return {
-        success: false,
-        error: "Account created. Please check your email to confirm before signing in.",
-      };
-    }
-
-    if (data.user) {
-      await ensureAppUserForAuth(data.user);
+    await pb.collection("users").authWithPassword(parsed.data.email, parsed.data.password);
+    await setPbAuthCookie(pb);
+    if (pb.authStore.record) {
+      await ensureAppUserForAuth(pb.authStore.record);
     }
   } catch (e) {
     unstable_rethrow(e);
-    throw e;
+    const err = e as { message?: string; data?: { data?: { email?: { message?: string } } } };
+    const msg =
+      err.data?.data?.email?.message ?? err.message ?? "Could not create account.";
+    return { success: false, error: msg };
   }
 
   redirect("/dashboard");
 }
 
 export async function logout(): Promise<void> {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
+  await clearPbAuthCookie();
   redirect("/");
 }
 
@@ -122,24 +121,19 @@ export async function forgotPassword(
   }
 
   try {
-    const supabase = await createClient();
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-      redirectTo: `${appUrl}/callback`,
-    });
-    if (error) {
-      return { success: false, error: error.message };
-    }
+    const pb = new PocketBase(getPocketBaseUrl());
+    await pb.collection("users").requestPasswordReset(parsed.data.email);
   } catch (e) {
     unstable_rethrow(e);
-    throw e;
+    const err = e as { message?: string };
+    return { success: false, error: err.message ?? "Request failed." };
   }
 
   return { success: true, message: "Check your email for a password reset link." };
 }
 
 export async function changePassword(
-  _prev: ActionResult | null,
+  _prevState: ActionResult | null,
   formData: FormData
 ): Promise<ActionResult> {
   const raw = {
@@ -165,28 +159,24 @@ export async function changePassword(
   }
 
   try {
-    const supabase = await createClient();
-    const { error: verifyErr } = await supabase.auth.signInWithPassword({
-      email: authUser.email,
-      password: parsed.data.currentPassword,
-    });
-    if (verifyErr) {
-      return {
-        success: false,
-        error: "Current password is incorrect, or this account only uses social sign-in.",
-        fieldErrors: { currentPassword: ["Check your current password."] },
-      };
+    const pb = await createUserPbFromCookies();
+    if (!pb.authStore.record) {
+      return { success: false, error: "Unauthorized" };
     }
-
-    const { error: updateErr } = await supabase.auth.updateUser({
+    await pb.collection("users").update(pb.authStore.record.id, {
+      oldPassword: parsed.data.currentPassword,
       password: parsed.data.newPassword,
+      passwordConfirm: parsed.data.confirmPassword,
     });
-    if (updateErr) {
-      return { success: false, error: updateErr.message };
-    }
+    await setPbAuthCookie(pb);
   } catch (e) {
     unstable_rethrow(e);
-    throw e;
+    const err = e as { message?: string };
+    return {
+      success: false,
+      error: err.message ?? "Could not update password.",
+      fieldErrors: { currentPassword: ["Check your current password."] },
+    };
   }
 
   return { success: true, message: "Your password was updated." };

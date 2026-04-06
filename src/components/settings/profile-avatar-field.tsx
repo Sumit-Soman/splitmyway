@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { uploadProfileAvatar, removeProfileAvatar } from "@/actions/avatar";
+import { MAX_PROFILE_AVATAR_BYTES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import { Button } from "@/components/ui/button";
 import { MemberAvatar } from "@/components/shared/member-avatar";
@@ -67,9 +68,18 @@ export function ProfileAvatarField({
               id="profile-avatar-file"
               disabled={uploadPending}
               onChange={(e) => {
-                if (e.target.files?.length) {
-                  e.currentTarget.form?.requestSubmit();
+                const f = e.target.files?.[0];
+                if (!f) return;
+                if (f.size > MAX_PROFILE_AVATAR_BYTES) {
+                  toast({
+                    title: "File too large",
+                    description: "Choose an image that is 2 MB or smaller.",
+                    variant: "destructive",
+                  });
+                  e.target.value = "";
+                  return;
                 }
+                e.currentTarget.form?.requestSubmit();
               }}
             />
             <Button

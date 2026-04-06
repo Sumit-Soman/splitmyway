@@ -9,7 +9,8 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { MemberDot, MemberName } from "@/components/shared/member-avatar";
 import { formatCurrency } from "@/lib/utils";
-import { EXPENSE_CATEGORIES, SPLIT_METHODS, CURRENCIES } from "@/lib/constants";
+import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES, SPLIT_METHODS, CURRENCIES } from "@/lib/constants";
+import { useToast } from "@/components/ui/toast";
 import type { SplitResult } from "@/lib/calculations/splits";
 
 type MemberRow = {
@@ -46,6 +47,7 @@ export function ExpenseDialogForm({
   defaultDateLocal,
   defaultPaidById,
   defaultNotes,
+  defaultAttachmentFileName,
   submitLabel,
   pending,
 }: {
@@ -77,9 +79,12 @@ export function ExpenseDialogForm({
   defaultDateLocal?: string;
   defaultPaidById?: string;
   defaultNotes?: string;
+  /** When editing, name of existing attachment (if any). */
+  defaultAttachmentFileName?: string | null;
   submitLabel: string;
   pending: boolean;
 }) {
+  const { toast } = useToast();
   const participantIds = Array.from(selected);
 
   return (
@@ -180,6 +185,39 @@ export function ExpenseDialogForm({
             defaultValue={defaultNotes ?? ""}
             key={`notes-${formKey}`}
           />
+        </div>
+        <div className="space-y-2 sm:col-span-2">
+          <Label htmlFor={`attachment-${formKey}`}>Attachment</Label>
+          <p className="text-xs text-neutral-500">Any file type · max 15 MB</p>
+          <Input
+            id={`attachment-${formKey}`}
+            name="attachment"
+            type="file"
+            className="cursor-pointer text-sm file:mr-3 file:rounded-md file:border-0 file:bg-neutral-100 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-neutral-800"
+            disabled={pending}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && f.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
+                toast({
+                  title: "File too large",
+                  description: "Attachments must be 15 MB or smaller.",
+                  variant: "destructive",
+                });
+                e.target.value = "";
+              }
+            }}
+          />
+          {defaultAttachmentFileName ? (
+            <div className="rounded-lg border border-neutral-200 bg-neutral-50/80 px-3 py-2 text-xs text-neutral-700">
+              <p className="mb-2">
+                Current: <span className="font-medium text-neutral-900">{defaultAttachmentFileName}</span>
+              </p>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input type="checkbox" name="removeAttachment" value="1" disabled={pending} />
+                Remove attachment
+              </label>
+            </div>
+          ) : null}
         </div>
         <div className="space-y-2 sm:col-span-2">
           <Label>Split method</Label>

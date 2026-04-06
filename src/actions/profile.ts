@@ -1,10 +1,10 @@
 "use server";
 
-import { prisma } from "@/lib/prisma";
 import { getAuthUser, getDbUserById } from "@/lib/auth/server-user";
 import { z } from "zod";
 import type { ActionResult } from "@/types";
 import { revalidatePath } from "next/cache";
+import { getAdminPb } from "@/lib/pocketbase/admin";
 
 const profileSchema = z.object({
   name: z.string().min(1).max(120),
@@ -32,12 +32,10 @@ export async function updateProfile(
     };
   }
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      name: parsed.data.name,
-      currency: parsed.data.currency.toUpperCase(),
-    },
+  const pb = await getAdminPb();
+  await pb.collection("users").update(user.id, {
+    name: parsed.data.name,
+    currency: parsed.data.currency.toUpperCase(),
   });
 
   revalidatePath("/settings");

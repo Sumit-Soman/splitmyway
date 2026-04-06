@@ -296,7 +296,7 @@ export function DashboardHome({
             <h2 id="dash-settlements-heading" className="text-lg font-semibold tracking-tight text-neutral-900">
               Settlement suggestions
             </h2>
-            <p className="text-sm text-neutral-500">Who should pay whom next — only transfers that involve you.</p>
+            <p className="text-sm text-neutral-500">Suggested payments that involve you.</p>
           </div>
           <Card className="border-neutral-200/90 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <CardContent className="space-y-3 p-5">
@@ -324,7 +324,7 @@ export function DashboardHome({
                         )}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-500">{s.groupName}</p>
+                          <p className="text-sm font-semibold text-neutral-900">{s.groupName || "Group"}</p>
                           <span
                             className={cn(
                               "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",

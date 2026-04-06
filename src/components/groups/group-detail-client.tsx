@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { ArrowRight, ArrowRightLeft, MoreVertical, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { createExpense, deleteExpense, updateExpense } from "@/actions/expenses";
@@ -31,6 +31,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { GroupBalancesExplainer } from "@/components/groups/group-balances-explainer";
 import { GroupFinancialSnapshot } from "@/components/groups/group-financial-snapshot";
 import { AddMemberPicker } from "@/components/groups/add-member-picker";
+import { ExpenseAttachmentPreview } from "@/components/groups/expense-attachment-preview";
 import { ExpenseDialogForm } from "@/components/groups/expense-dialog-form";
 import { getMemberPalette } from "@/lib/member-colors";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -50,7 +51,16 @@ import type { GroupDetailSerialized } from "@/actions/group-detail";
 const groupHeaderMetaClass =
   "h-7 shrink-0 gap-1.5 border-neutral-200/90 bg-neutral-50/90 py-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-600 shadow-[0_1px_2px_rgba(15,23,42,0.04)]";
 
-export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
+export function GroupDetailClient({
+  data,
+  initialTab,
+  replaceUrlAfterCreate = false,
+}: {
+  data: GroupDetailSerialized;
+  initialTab?: "expenses" | "balances" | "members" | "settlements";
+  /** Strip `?from=create` from the URL after first paint so later visits open on Expenses. */
+  replaceUrlAfterCreate?: boolean;
+}) {
   const router = useRouter();
   const { toast } = useToast();
   const { group, members, expenses, balances, suggestions, settlements, role, currentUserId, invitations } = data;
@@ -73,15 +83,29 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
     [suggestions, currentUserId]
   );
 
+  /** First minimized edge where you are the debtor (you → someone). Used to prefill the settlement form. */
+  const primaryYouOwe = useMemo(() => youPaySuggestions[0] ?? null, [youPaySuggestions]);
+
   type GroupTab = "expenses" | "balances" | "members" | "settlements";
-  const [groupTab, setGroupTab] = useState<GroupTab>("expenses");
+  const [groupTab, setGroupTab] = useState<GroupTab>(() => initialTab ?? "expenses");
 
   useEffect(() => {
-    setGroupTab("expenses");
-  }, [group.id]);
+    setGroupTab(initialTab ?? "expenses");
+  }, [group.id, initialTab]);
+
+  useEffect(() => {
+    if (!replaceUrlAfterCreate || typeof window === "undefined") return;
+    const path = `/groups/${group.id}`;
+    if (window.location.pathname !== path || window.location.search) {
+      window.history.replaceState(window.history.state, "", path);
+    }
+  }, [replaceUrlAfterCreate, group.id]);
 
   const [addOpen, setAddOpen] = useState(false);
+  const prevAddOpenRef = useRef(false);
   const [settleOpen, setSettleOpen] = useState(false);
+  const [settleFormMountKey, setSettleFormMountKey] = useState(0);
+  const prevSettleOpenRef = useRef(false);
   const [settlePreset, setSettlePreset] = useState<{
     fromId: string;
     toId: string;
@@ -111,9 +135,43 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
     setSelected(new Set(members.map((m) => m.userId)));
   }, [members]);
 
+  /** Switching groups must not keep the previous group's add form state (same client component instance). */
+  useEffect(() => {
+    setAmountStr("");
+    setExpenseCurrency(group.currency);
+    setSplitMethod("equal");
+    setExactMap({});
+    setPctMap({});
+    setShareMap({});
+    setRatePreview(null);
+  }, [group.id, group.currency]);
+
+  /** Fresh add-expense form each time the dialog opens (avoids stale amount/currency/split after a successful add). */
+  useEffect(() => {
+    if (addOpen && !prevAddOpenRef.current) {
+      setAmountStr("");
+      setExpenseCurrency(group.currency);
+      setSplitMethod("equal");
+      setExactMap({});
+      setPctMap({});
+      setShareMap({});
+      setRatePreview(null);
+      setSelected(new Set(members.map((m) => m.userId)));
+    }
+    prevAddOpenRef.current = addOpen;
+  }, [addOpen, group.currency, members]);
+
   useEffect(() => {
     setEditingExpense(null);
   }, [group.id]);
+
+  /** Fresh uncontrolled settlement fields each time the dialog opens. */
+  useEffect(() => {
+    if (settleOpen && !prevSettleOpenRef.current) {
+      setSettleFormMountKey((k) => k + 1);
+    }
+    prevSettleOpenRef.current = settleOpen;
+  }, [settleOpen]);
 
   useEffect(() => {
     if (!editingExpense) return;
@@ -428,6 +486,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                       defaultDateLocal={format(new Date(editingExpense.date), "yyyy-MM-dd'T'HH:mm")}
                       defaultPaidById={editingExpense.paidById}
                       defaultNotes={editingExpense.notes ?? ""}
+                      defaultAttachmentFileName={editingExpense.attachmentFileName}
                       submitLabel="Save changes"
                       pending={updateExpensePending}
                     />
@@ -534,6 +593,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                             {e.notes.trim()}
                           </p>
                         ) : null}
+                        <ExpenseAttachmentPreview expenseId={e.id} fileName={e.attachmentFileName} />
                         {e.participants.length > 0 ? (
                           <ul
                             className="mt-2.5 space-y-1 rounded-lg border border-neutral-100 bg-neutral-50/90 px-2.5 py-2"
@@ -620,16 +680,14 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {isAdmin ? (
-                <div className="rounded-xl border border-neutral-200/90 bg-neutral-50/40 p-4 sm:p-5">
-                  <AddMemberPicker
-                    key={`${group.id}-${members.length}-${invitations.length}`}
-                    groupId={group.id}
-                    formAction={memberAction}
-                    pending={memberPending}
-                  />
-                </div>
-              ) : null}
+              <div className="rounded-xl border border-neutral-200/90 bg-neutral-50/40 p-4 sm:p-5">
+                <AddMemberPicker
+                  key={`${group.id}-${members.length}-${invitations.length}`}
+                  groupId={group.id}
+                  formAction={memberAction}
+                  pending={memberPending}
+                />
+              </div>
               <Separator />
               <ul className="space-y-2">
                 {members.map((m) => (
@@ -678,23 +736,44 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="rounded-lg border border-neutral-200/90 bg-neutral-50/70 p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                  <div className="min-w-0 space-y-1">
-                    <p className="text-sm font-medium text-neutral-900">Record a settlement</p>
-                    <p className="text-xs leading-relaxed text-neutral-600">
-                      Use this when someone pays another member directly so running balances stay accurate.
-                    </p>
+              <div className="rounded-xl border border-neutral-200/90 bg-gradient-to-b from-neutral-50/90 to-white p-4 shadow-sm sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <p className="text-sm font-semibold text-neutral-900">Record a settlement</p>
+                    {primaryYouOwe ? (
+                      <p className="text-xs leading-relaxed text-neutral-600">
+                        You owe{" "}
+                        <CurrencyDisplay
+                          amount={primaryYouOwe.amount}
+                          currency={group.currency}
+                          direction="you-owe"
+                          className="inline text-xs font-medium"
+                        />{" "}
+                        to{" "}
+                        <MemberName userId={primaryYouOwe.toId} className="font-medium text-neutral-800">
+                          {primaryYouOwe.toName}
+                        </MemberName>
+                        .
+                      </p>
+                    ) : null}
                   </div>
                   <Button
                     type="button"
-                    className="w-full shrink-0 sm:w-auto"
+                    className="h-11 w-full shrink-0 px-5 sm:mt-0.5 sm:w-auto sm:min-w-[11rem]"
                     onClick={() => {
-                      setSettlePreset(null);
+                      if (primaryYouOwe) {
+                        setSettlePreset({
+                          fromId: primaryYouOwe.fromId,
+                          toId: primaryYouOwe.toId,
+                          amount: primaryYouOwe.amount.toFixed(2),
+                        });
+                      } else {
+                        setSettlePreset(null);
+                      }
                       setSettleOpen(true);
                     }}
                   >
-                    <ArrowRightLeft className="h-4 w-4" aria-hidden />
+                    <ArrowRightLeft className="h-4 w-4 shrink-0" aria-hidden />
                     Record settlement
                   </Button>
                 </div>
@@ -707,7 +786,7 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                   No settlements yet — add one when someone settles up.
                 </p>
               ) : (
-                <ul className="space-y-2" aria-label="Settlements in this group">
+                <ul className="space-y-2.5" aria-label="Settlements in this group">
                   {settlements.map((s) => {
                     const fromLabel = s.from.name ?? s.from.email;
                     const toLabel = s.to.name ?? s.to.email;
@@ -716,48 +795,46 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                       <li
                         key={s.id}
                         className={cn(
-                          "flex flex-col gap-2 rounded-lg border border-neutral-200 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between",
+                          "grid grid-cols-1 gap-3 rounded-xl border border-neutral-200/90 px-4 py-3.5 sm:grid-cols-[auto_minmax(0,1fr)_minmax(6.5rem,auto)] sm:items-start sm:gap-4",
                           getMemberPalette(s.fromId).rowBg
                         )}
                       >
-                        <div className="flex min-w-0 flex-1 items-start gap-3">
-                          <div className="flex shrink-0 items-center gap-1" aria-hidden>
-                            <MemberAvatar
-                              size="sm"
-                              userId={s.fromId}
-                              name={s.from.name}
-                              email={s.from.email}
-                              avatarUrl={s.from.avatarUrl}
-                            />
-                            <ArrowRight className="h-3.5 w-3.5 shrink-0 text-neutral-300" strokeWidth={2} />
-                            <MemberAvatar
-                              size="sm"
-                              userId={s.toId}
-                              name={s.to.name}
-                              email={s.to.email}
-                              avatarUrl={s.to.avatarUrl}
-                            />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-neutral-800">
-                              <MemberName userId={s.fromId}>{fromLabel}</MemberName>{" "}
-                              <span className="font-normal text-neutral-500">paid</span>{" "}
-                              <MemberName userId={s.toId}>{toLabel}</MemberName>
-                            </p>
-                            <p className="text-xs text-neutral-500">
-                              {format(when, "MMM d, yyyy")} · {format(when, "h:mm a")}
-                              {s.notes ? (
-                                <>
-                                  {" "}
-                                  · <span className="text-neutral-600">{s.notes}</span>
-                                </>
-                              ) : null}
-                            </p>
-                          </div>
+                        <div className="flex shrink-0 items-center gap-1.5 justify-self-start sm:pt-0.5" aria-hidden>
+                          <MemberAvatar
+                            size="sm"
+                            userId={s.fromId}
+                            name={s.from.name}
+                            email={s.from.email}
+                            avatarUrl={s.from.avatarUrl}
+                          />
+                          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-neutral-300" strokeWidth={2} />
+                          <MemberAvatar
+                            size="sm"
+                            userId={s.toId}
+                            name={s.to.name}
+                            email={s.to.email}
+                            avatarUrl={s.to.avatarUrl}
+                          />
                         </div>
-                        <div className="shrink-0 sm:pl-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium leading-snug text-neutral-800">
+                            <MemberName userId={s.fromId}>{fromLabel}</MemberName>{" "}
+                            <span className="font-normal text-neutral-500">paid</span>{" "}
+                            <MemberName userId={s.toId}>{toLabel}</MemberName>
+                          </p>
+                          <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                            {format(when, "MMM d, yyyy")} · {format(when, "h:mm a")}
+                            {s.notes ? (
+                              <>
+                                {" "}
+                                · <span className="text-neutral-600">{s.notes}</span>
+                              </>
+                            ) : null}
+                          </p>
+                        </div>
+                        <div className="flex justify-end border-t border-neutral-100 pt-3 sm:border-t-0 sm:justify-end sm:pt-0.5 sm:text-right">
                           <CurrencyDisplay
-                            className="text-sm sm:text-[15px]"
+                            className="text-base font-semibold tabular-nums sm:text-[15px]"
                             amount={s.amount}
                             currency={s.currency}
                             direction="neutral"
@@ -784,49 +861,53 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
           <form
             key={
               settlePreset
-                ? `p-${settlePreset.fromId}-${settlePreset.toId}-${settlePreset.amount}`
-                : `d-${settleFormDataKey}`
+                ? `p-${settlePreset.fromId}-${settlePreset.toId}-${settlePreset.amount}-${settleFormMountKey}`
+                : `d-${settleFormDataKey}-${settleFormMountKey}`
             }
             action={settleAction}
-            className="space-y-3"
+            className="space-y-4"
           >
             <input type="hidden" name="groupId" value={group.id} />
-            <div className="space-y-2">
-              <Label>From</Label>
-              <Select
-                name="fromId"
-                defaultValue={
-                  settlePreset?.fromId ??
-                  suggestions[0]?.fromId ??
-                  members[0]?.userId ??
-                  ""
-                }
-              >
-                {members.map((m) => (
-                  <option key={m.userId} value={m.userId}>
-                    {m.name ?? m.email}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>To</Label>
-              <Select
-                name="toId"
-                defaultValue={
-                  settlePreset?.toId ??
-                  suggestions[0]?.toId ??
-                  members.find((m) => m.userId !== members[0]?.userId)?.userId ??
-                  members[0]?.userId ??
-                  ""
-                }
-              >
-                {members.map((m) => (
-                  <option key={m.userId} value={m.userId}>
-                    {m.name ?? m.email}
-                  </option>
-                ))}
-              </Select>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="settle-from">From</Label>
+                <Select
+                  id="settle-from"
+                  name="fromId"
+                  defaultValue={
+                    settlePreset?.fromId ??
+                    suggestions[0]?.fromId ??
+                    members[0]?.userId ??
+                    ""
+                  }
+                >
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name ?? m.email}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="settle-to">To</Label>
+                <Select
+                  id="settle-to"
+                  name="toId"
+                  defaultValue={
+                    settlePreset?.toId ??
+                    suggestions[0]?.toId ??
+                    members.find((m) => m.userId !== members[0]?.userId)?.userId ??
+                    members[0]?.userId ??
+                    ""
+                  }
+                >
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name ?? m.email}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="samount">Amount ({group.currency})</Label>
@@ -835,17 +916,21 @@ export function GroupDetailClient({ data }: { data: GroupDetailSerialized }) {
                 name="amount"
                 type="number"
                 step="0.01"
+                inputMode="decimal"
                 required
+                className="h-11 font-medium tabular-nums"
                 defaultValue={settlePreset?.amount ?? ""}
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="snotes">Notes</Label>
-              <Textarea id="snotes" name="notes" rows={2} />
+              <Textarea id="snotes" name="notes" rows={2} className="min-h-[4.5rem] resize-y" />
             </div>
-            <Button type="submit" disabled={settlePending}>
-              {settlePending ? "Saving…" : "Save"}
-            </Button>
+            <div className="flex justify-end pt-1">
+              <Button type="submit" disabled={settlePending} className="w-full sm:w-auto sm:min-w-[7.5rem]">
+                {settlePending ? "Saving…" : "Save"}
+              </Button>
+            </div>
           </form>
         </DialogContent>
       </Dialog>

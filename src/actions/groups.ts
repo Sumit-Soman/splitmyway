@@ -1,17 +1,20 @@
 "use server";
 
 import { unstable_noStore as noStore } from "next/cache";
-import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/prisma";
+import { getAdminPb } from "@/lib/pocketbase/admin";
 import { getAuthUser, requireUser } from "@/lib/auth/server-user";
 import { calculateBalances } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
-import { memberSearchMatchSql, sanitizeMemberSearchRaw } from "@/lib/member-search-sql";
+import { sanitizeMemberSearchRaw } from "@/lib/member-search";
 import { addMemberSchema, createGroupSchema } from "@/lib/validations/group";
 import { ACTIVITY_TYPES } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { escapeFilterValue } from "@/lib/pocketbase/filter-escape";
+import { recordField } from "@/lib/pocketbase/record-field";
+import { listMembershipsForUser, findMembership } from "@/lib/pocketbase/queries";
+import type { RecordModel } from "pocketbase";
 
 export async function createGroup(
   _prev: ActionResult | null,
@@ -32,114 +35,121 @@ export async function createGroup(
     };
   }
 
-  const group = await prisma.$transaction(async (tx) => {
-    const g = await tx.group.create({
-      data: {
-        name: parsed.data.name,
-        description: parsed.data.description,
-        category: parsed.data.category,
-        currency: parsed.data.currency,
-      },
-    });
-    await tx.groupMember.create({
-      data: {
-        userId: user.id,
-        groupId: g.id,
-        role: "admin",
-      },
-    });
-    await tx.activityLog.create({
-      data: {
-        userId: user.id,
-        groupId: g.id,
-        type: ACTIVITY_TYPES.GROUP_CREATED,
-        metadata: { groupName: g.name },
-      },
-    });
-    return g;
+  const auth = await getAdminPb();
+  const g = await auth.collection("groups").create({
+    name: parsed.data.name,
+    description: parsed.data.description ?? "",
+    category: parsed.data.category,
+    currency: parsed.data.currency,
+  });
+
+  await auth.collection("group_members").create({
+    user: user.id,
+    group: g.id,
+    role: "admin",
+    joined_at: new Date().toISOString(),
+  });
+
+  await auth.collection("activity_logs").create({
+    user: user.id,
+    group: g.id,
+    type: ACTIVITY_TYPES.GROUP_CREATED,
+    metadata: { groupName: parsed.data.name },
   });
 
   revalidatePath("/groups");
   revalidatePath("/dashboard");
-  redirect(`/groups/${group.id}`);
+  redirect(`/groups/${g.id}?from=create`);
 }
 
 export async function getGroupsForUser() {
   noStore();
   const user = await requireUser();
-  const memberships = await prisma.groupMember.findMany({
-    where: { userId: user.id },
-    orderBy: { joinedAt: "desc" },
-    select: { groupId: true, role: true },
-  });
+  const memberships = await listMembershipsForUser(user.id);
   if (memberships.length === 0) return [];
 
   const groupIds = memberships.map((m) => m.groupId);
   const roleByGroupId = new Map(memberships.map((m) => [m.groupId, m.role]));
+  const pb = await getAdminPb();
 
-  const groups = await prisma.group.findMany({
-    where: { id: { in: groupIds } },
-    include: {
-      members: { select: { userId: true } },
-      expenses: {
-        include: { participants: true },
-      },
-      settlements: true,
-      _count: { select: { members: true, expenses: true } },
-    },
-  });
+  const groupsPayload = [];
+  for (const gid of groupIds) {
+    const g = await pb.collection("groups").getOne(gid);
+    const memRows = await pb.collection("group_members").getFullList({
+      filter: `group = "${escapeFilterValue(gid)}"`,
+    });
+    const expRows = await pb.collection("expenses").getFullList({
+      filter: `group = "${escapeFilterValue(gid)}"`,
+    });
+    const setRows = await pb.collection("settlements").getFullList({
+      filter: `group = "${escapeFilterValue(gid)}"`,
+    });
 
-  const orderIndex = new Map(groupIds.map((id, i) => [id, i]));
-  groups.sort((a, b) => (orderIndex.get(a.id) ?? 0) - (orderIndex.get(b.id) ?? 0));
+    const memberIds = memRows.map((m) => String(recordField(m, "user") ?? ""));
+    const expensesData = [];
+    for (const e of expRows) {
+      const plist = await pb.collection("expense_participants").getFullList({
+        filter: `expense = "${escapeFilterValue(e.id)}"`,
+      });
+      expensesData.push({
+        paidById: String(recordField(e, "paid_by") ?? ""),
+        participants: plist.map((p) => ({
+          userId: String(recordField(p, "user") ?? ""),
+          amount: toNumber(String(recordField(p, "amount") ?? "")),
+        })),
+      });
+    }
 
-  return groups.map((g) => {
-    const memberIds = g.members.map((m) => m.userId);
     const balancesMap = calculateBalances({
       memberIds,
-      expenses: g.expenses.map((e) => ({
+      expenses: expensesData.map((e) => ({
         paidById: e.paidById,
-        participants: e.participants.map((p) => ({
-          userId: p.userId,
-          amount: toNumber(p.amount),
-        })),
+        participants: e.participants,
       })),
-      settlements: g.settlements.map((s) => ({
-        fromId: s.fromId,
-        toId: s.toId,
-        amount: toNumber(s.amount),
+      settlements: setRows.map((s) => ({
+        fromId: String(recordField(s, "from_user") ?? ""),
+        toId: String(recordField(s, "to_user") ?? ""),
+        amount: toNumber(String(recordField(s, "amount") ?? "")),
       })),
     });
     const raw = balancesMap[user.id] ?? 0;
     const yourBalance = Math.round(raw * 100) / 100;
 
-    return {
+    groupsPayload.push({
       id: g.id,
-      name: g.name,
-      description: g.description,
-      category: g.category,
-      currency: g.currency,
+      name: String(recordField(g, "name") ?? ""),
+      description: (recordField(g, "description") as string | null) ?? null,
+      category: String(recordField(g, "category") ?? ""),
+      currency: String(recordField(g, "currency") ?? ""),
       role: roleByGroupId.get(g.id) ?? "member",
-      memberCount: g._count.members,
-      expenseCount: g._count.expenses,
+      memberCount: memRows.length,
+      expenseCount: expRows.length,
       yourBalance,
-    };
-  });
+    });
+  }
+
+  return groupsPayload;
 }
 
 export type GroupListItem = Awaited<ReturnType<typeof getGroupsForUser>>[number];
 
 export async function getGroupById(groupId: string) {
   const user = await requireUser();
-  const membership = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId: user.id, groupId } },
-    include: {
-      group: true,
-    },
-  });
+  const membership = await findMembership(user.id, groupId);
   if (!membership) return null;
+  const pb = await getAdminPb();
+  const g = await pb.collection("groups").getOne(groupId);
+  const createdRaw = String(recordField(g, "created") ?? "");
+  const updatedRaw = String(recordField(g, "updated") ?? "");
   return {
-    ...membership.group,
-    role: membership.role,
+    id: g.id,
+    name: String(recordField(g, "name") ?? ""),
+    description: (recordField(g, "description") as string | null) ?? null,
+    category: String(recordField(g, "category") ?? ""),
+    currency: String(recordField(g, "currency") ?? ""),
+    createdAt: new Date(createdRaw || 0),
+    updatedAt: new Date(updatedRaw || 0),
+    role: String(recordField(membership, "role") ?? "member"),
   };
 }
 
@@ -150,10 +160,6 @@ export type MemberSearchHit = {
   avatarUrl: string | null;
 };
 
-/**
- * Search registered users by first name (first word of display name), min 3 characters.
- * Group admins only; excludes current members and yourself.
- */
 export async function searchGroupMemberCandidates(groupId: string, query: string): Promise<MemberSearchHit[]> {
   noStore();
   const user = await getAuthUser();
@@ -162,62 +168,35 @@ export async function searchGroupMemberCandidates(groupId: string, query: string
   const raw = sanitizeMemberSearchRaw(query);
   if (!raw) return [];
 
-  const admin = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId: user.id, groupId } },
+  const membership = await findMembership(user.id, groupId);
+  if (!membership) return [];
+
+  const pb = await getAdminPb();
+  const memberRows = await pb.collection("group_members").getFullList({
+    filter: `group = "${escapeFilterValue(groupId)}"`,
   });
-  if (!admin || admin.role !== "admin") return [];
+  const memberIds = new Set(
+    memberRows.map((m) => String(recordField(m, "user") ?? "")).filter(Boolean)
+  );
 
-  const memberRows = await prisma.groupMember.findMany({
-    where: { groupId },
-    select: { userId: true },
+  const safe = escapeFilterValue(raw.toLowerCase());
+  const filter = `(email ~ "${safe}%" || name ~ "${safe}%") && id != "${escapeFilterValue(user.id)}"`;
+  let candidates = await pb.collection("users").getFullList({
+    filter,
+    perPage: 50,
   });
-  const memberIds = memberRows.map((m) => m.userId);
 
-  const matchSql = memberSearchMatchSql(raw);
+  candidates = candidates.filter((c) => !memberIds.has(c.id)).slice(0, 12);
 
-  try {
-    if (memberIds.length === 0) {
-      const rows = await prisma.$queryRaw<
-        { id: string; name: string | null; email: string; avatar_url: string | null }[]
-      >(Prisma.sql`
-        SELECT u.id, u.name, u.email, u.avatar_url
-        FROM users u
-        WHERE ${matchSql}
-          AND u.id::text <> ${user.id}::text
-        ORDER BY u.name ASC NULLS LAST
-        LIMIT 12
-      `);
-      return rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        email: r.email,
-        avatarUrl: r.avatar_url,
-      }));
-    }
-
-    const rows = await prisma.$queryRaw<
-      { id: string; name: string | null; email: string; avatar_url: string | null }[]
-    >(Prisma.sql`
-      SELECT u.id, u.name, u.email, u.avatar_url
-      FROM users u
-      WHERE ${matchSql}
-        AND u.id::text <> ${user.id}::text
-        AND u.id::text NOT IN (${Prisma.join(memberIds)})
-      ORDER BY u.name ASC NULLS LAST
-      LIMIT 12
-    `);
-    return rows.map((r) => ({
+  return candidates.map((r) => {
+    const av = recordField(r, "avatar");
+    return {
       id: r.id,
-      name: r.name,
+      name: (recordField(r, "name") as string | null) ?? null,
       email: r.email,
-      avatarUrl: r.avatar_url,
-    }));
-  } catch (e) {
-    if (process.env.NODE_ENV === "development") {
-      console.error("[searchGroupMemberCandidates]", e);
-    }
-    return [];
-  }
+      avatarUrl: av ? pb.files.getUrl(r as Record<string, unknown>, String(av)) : null,
+    };
+  });
 }
 
 export async function addMemberToGroup(
@@ -237,55 +216,49 @@ export async function addMemberToGroup(
     };
   }
 
-  const admin = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId: current.id, groupId: parsed.data.groupId } },
-  });
-  if (!admin || admin.role !== "admin") {
-    return { success: false, error: "Only admins can add members." };
+  const adm = await findMembership(current.id, parsed.data.groupId);
+  if (!adm) {
+    return { success: false, error: "You are not a member of this group." };
   }
 
-  const target = await prisma.user.findUnique({
-    where: { email: parsed.data.email.toLowerCase().trim() },
+  const pb = await getAdminPb();
+  const emailLower = parsed.data.email.toLowerCase().trim();
+  const existing = await pb.collection("users").getFullList({
+    filter: `email = "${escapeFilterValue(emailLower)}"`,
+    limit: 1,
   });
+  const target = existing[0] as RecordModel | undefined;
 
   if (target) {
     if (target.id === current.id) {
       return { success: false, error: "You are already in this group." };
     }
-    const existing = await prisma.groupMember.findUnique({
-      where: { userId_groupId: { userId: target.id, groupId: parsed.data.groupId } },
-    });
-    if (existing) {
+    const already = await findMembership(target.id, parsed.data.groupId);
+    if (already) {
       return { success: false, error: "User is already a member." };
     }
-    await prisma.$transaction([
-      prisma.groupMember.create({
-        data: {
-          userId: target.id,
-          groupId: parsed.data.groupId,
-          role: "member",
-        },
-      }),
-      prisma.activityLog.create({
-        data: {
-          userId: current.id,
-          groupId: parsed.data.groupId,
-          type: ACTIVITY_TYPES.MEMBER_ADDED,
-          metadata: { email: target.email, name: target.name },
-        },
-      }),
-    ]);
+    await pb.collection("group_members").create({
+      user: target.id,
+      group: parsed.data.groupId,
+      role: "member",
+      joined_at: new Date().toISOString(),
+    });
+    await pb.collection("activity_logs").create({
+      user: current.id,
+      group: parsed.data.groupId,
+      type: ACTIVITY_TYPES.MEMBER_ADDED,
+      metadata: { email: target.email, name: recordField(target, "name") },
+    });
   } else {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 14);
-    await prisma.invitation.create({
-      data: {
-        groupId: parsed.data.groupId,
-        email: parsed.data.email.toLowerCase().trim(),
-        invitedBy: current.id,
-        expiresAt,
-        status: "pending",
-      },
+    await pb.collection("invitations").create({
+      group: parsed.data.groupId,
+      email: emailLower,
+      invited_by: current.id,
+      expires_at: expiresAt.toISOString(),
+      status: "pending",
+      token: crypto.randomUUID(),
     });
     revalidatePath(`/groups/${parsed.data.groupId}`);
     return {
@@ -302,36 +275,31 @@ export async function addMemberToGroup(
 
 export async function removeMemberFromGroup(groupId: string, userId: string): Promise<ActionResult> {
   const current = await requireUser();
-  const admin = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId: current.id, groupId } },
-  });
-  if (!admin || admin.role !== "admin") {
+  const admin = await findMembership(current.id, groupId);
+  if (!admin || String(recordField(admin, "role") ?? "") !== "admin") {
     return { success: false, error: "Only admins can remove members." };
   }
   if (userId === current.id) {
     return { success: false, error: "Use leave group instead (not implemented)." };
   }
 
-  const member = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId, groupId } },
+  const pb = await getAdminPb();
+  const member = await pb.collection("group_members").getFullList({
+    filter: `user = "${escapeFilterValue(userId)}" && group = "${escapeFilterValue(groupId)}"`,
+    limit: 1,
   });
-  if (!member) {
+  const row = member[0];
+  if (!row) {
     return { success: false, error: "Member not found." };
   }
 
-  await prisma.$transaction([
-    prisma.groupMember.delete({
-      where: { userId_groupId: { userId, groupId } },
-    }),
-    prisma.activityLog.create({
-      data: {
-        userId: current.id,
-        groupId,
-        type: ACTIVITY_TYPES.MEMBER_REMOVED,
-        metadata: { removedUserId: userId },
-      },
-    }),
-  ]);
+  await pb.collection("group_members").delete(row.id);
+  await pb.collection("activity_logs").create({
+    user: current.id,
+    group: groupId,
+    type: ACTIVITY_TYPES.MEMBER_REMOVED,
+    metadata: { removedUserId: userId },
+  });
 
   revalidatePath(`/groups/${groupId}`);
   return { success: true };
@@ -339,14 +307,13 @@ export async function removeMemberFromGroup(groupId: string, userId: string): Pr
 
 export async function deleteGroup(groupId: string): Promise<ActionResult> {
   const current = await requireUser();
-  const admin = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId: current.id, groupId } },
-  });
-  if (!admin || admin.role !== "admin") {
+  const admin = await findMembership(current.id, groupId);
+  if (!admin || String(recordField(admin, "role") ?? "") !== "admin") {
     return { success: false, error: "Only admins can delete the group." };
   }
 
-  await prisma.group.delete({ where: { id: groupId } });
+  const pb = await getAdminPb();
+  await pb.collection("groups").delete(groupId);
   revalidatePath("/groups");
   revalidatePath("/dashboard");
   revalidatePath("/settlements");

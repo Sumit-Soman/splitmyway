@@ -1,29 +1,19 @@
 "use server";
 
 import { unstable_noStore as noStore } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { getAuthUser, getDbUserById } from "@/lib/auth/server-user";
 import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
 import { toNumber } from "@/lib/utils";
 import { perf } from "@/lib/perf";
+import { loadGroupsDataForUser } from "@/lib/pocketbase/queries";
 
 export async function getDashboardData() {
   noStore();
   const user = await perf("getAuthUser", () => getAuthUser());
   if (!user) return null;
 
-  const [dbUser, groupsData] = await perf("prisma dashboard queries", () =>
-    Promise.all([
-      getDbUserById(user.id),
-      prisma.group.findMany({
-        where: { members: { some: { userId: user.id } } },
-        include: {
-          members: { include: { user: true } },
-          expenses: { include: { participants: true } },
-          settlements: true,
-        },
-      }),
-    ])
+  const [dbUser, groupsData] = await perf("pocketbase dashboard queries", () =>
+    Promise.all([getDbUserById(user.id), loadGroupsDataForUser(user.id)])
   );
 
   let netBalance = 0;

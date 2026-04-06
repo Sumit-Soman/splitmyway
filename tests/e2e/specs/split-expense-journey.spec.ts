@@ -1,8 +1,8 @@
 /**
  * End-to-end: two users, shared group, expenses, deletion, settlement, cross-surface checks.
  *
- * Setup: root `.env` with DATABASE_URL + Supabase. Copy `tests/e2e/env.e2e.example` → `tests/e2e/.env.local`
- * and add SUPABASE_SERVICE_ROLE_KEY to auto-provision test users before the run.
+ * Setup: PocketBase running (`npm run pb:serve`), root `.env` with POCKETBASE_* and E2E user vars.
+ * Optional: `tests/e2e/.env.local` from `env.e2e.example`. Global setup creates E2E users in PB if missing.
  */
 import { test, expect } from "@playwright/test";
 import { E2E, uniqueGroupName } from "../fixtures/constants";

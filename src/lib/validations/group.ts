@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recordIdSchema } from "@/lib/validations/record-id";
 
 export const createGroupSchema = z.object({
   name: z.string().min(1).max(120),
@@ -8,6 +9,6 @@ export const createGroupSchema = z.object({
 });
 
 export const addMemberSchema = z.object({
-  groupId: z.string().uuid(),
+  groupId: recordIdSchema,
   email: z.string().email(),
 });

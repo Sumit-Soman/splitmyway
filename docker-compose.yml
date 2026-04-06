@@ -1,0 +1,10 @@
+services:
+  pocketbase:
+    image: ghcr.io/muchobien/pocketbase:0.25.8
+    command: /usr/local/bin/pocketbase serve --http=0.0.0.0:8090 --dir=/pb/pb_data --migrationsDir=/pb/pb_migrations
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./pb_data:/pb/pb_data
+      - ./pb_migrations:/pb/pb_migrations
+    working_dir: /pb

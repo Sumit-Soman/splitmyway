@@ -29,18 +29,21 @@ export function ReportsClient({ data }: { data: ReportPayload }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+        <div className="min-w-0 shrink">
           <h1 className="page-heading">Reports</h1>
           <p className="page-subheading">Filter and export your shared spending.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <div className="space-y-1">
-            <label className="text-[13px] font-medium text-neutral-600">Group</label>
+        <div className="w-full shrink-0 lg:max-w-xl">
+          <label htmlFor="reports-group-filter" className="mb-1.5 block text-[13px] font-medium text-neutral-600">
+            Group
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2">
             <Select
+              id="reports-group-filter"
               value={groupId}
               onChange={(e) => applyGroupFilter(e.target.value)}
-              className="min-w-[200px]"
+              className="h-11 w-full min-w-0 sm:min-w-[200px] sm:flex-1"
             >
               <option value="">All groups</option>
               {data.groups.map((g) => (
@@ -49,23 +52,31 @@ export function ReportsClient({ data }: { data: ReportPayload }) {
                 </option>
               ))}
             </Select>
+            <div className="flex w-full gap-2 sm:w-auto sm:shrink-0">
+              <a
+                href={`/api/reports/csv?groupId=${encodeURIComponent(groupId || "")}`}
+                className={cn(
+                  buttonVariants({ variant: "outline", size: "default" }),
+                  "inline-flex h-11 flex-1 items-center justify-center gap-2 sm:flex-initial sm:min-w-[5.5rem]"
+                )}
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                CSV
+              </a>
+              <a
+                href={`/api/reports/pdf?groupId=${encodeURIComponent(groupId || "")}`}
+                target="_blank"
+                rel="noreferrer"
+                className={cn(
+                  buttonVariants({ variant: "outline", size: "default" }),
+                  "inline-flex h-11 flex-1 items-center justify-center gap-2 sm:flex-initial sm:min-w-[5.5rem]"
+                )}
+              >
+                <Download className="h-4 w-4 shrink-0" />
+                PDF
+              </a>
+            </div>
           </div>
-          <a
-            href={`/api/reports/csv?groupId=${encodeURIComponent(groupId || "")}`}
-            className={cn(buttonVariants({ variant: "outline" }), "inline-flex gap-2")}
-          >
-            <Download className="h-4 w-4" />
-            CSV
-          </a>
-          <a
-            href={`/api/reports/pdf?groupId=${encodeURIComponent(groupId || "")}`}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(buttonVariants({ variant: "outline" }), "inline-flex gap-2")}
-          >
-            <Download className="h-4 w-4" />
-            PDF
-          </a>
         </div>
       </div>
 

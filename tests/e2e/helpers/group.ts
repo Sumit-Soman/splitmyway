@@ -18,7 +18,7 @@ export async function createGroup(page: Page, name: string, currencyValue: strin
   await page.locator("#currency").selectOption(currencyValue);
   await page.getByRole("button", { name: "Create group" }).click();
   // Next.js client `router.push` does not always fire a document `load` event — poll URL instead.
-  await expect(page).toHaveURL(/\/groups\/[0-9a-f-]+$/i, { timeout: 45_000 });
+  await expect(page).toHaveURL(/\/groups\/[a-z0-9]+\?from=create/i, { timeout: 45_000 });
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible({ timeout: 15_000 });
   // Next.js App Router can leave internal navigation pending; drain before further UI actions.
   await page.waitForLoadState("domcontentloaded");

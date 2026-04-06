@@ -105,11 +105,11 @@ export function AddMemberPicker({
 
       <div ref={containerRef} className="relative space-y-2">
         <Label htmlFor="member-search" className="text-sm font-medium text-neutral-800">
-          Find by first name
+          Search people to add
         </Label>
         <p className="text-xs leading-relaxed text-neutral-500">
-          Type at least three letters of their <span className="font-medium text-neutral-600">first name</span>, then
-          pick them from the list.
+          Type at least three letters of a <span className="font-medium text-neutral-600">name or email</span>, then pick
+          them from the list.
         </p>
         <div className="relative">
           <Search
