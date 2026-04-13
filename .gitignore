@@ -13,6 +13,11 @@ build
 .env
 .env.local
 .env.*.local
+apps/worker/.dev.vars
+apps/worker/.wrangler/
+
+# Generated PocketBase → D1 import (may contain sensitive rows)
+scripts/pb-to-d1-import.sql
 
 # Debug
 npm-debug.log*

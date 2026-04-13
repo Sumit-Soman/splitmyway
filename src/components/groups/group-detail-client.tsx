@@ -380,40 +380,31 @@ export function GroupDetailClient({
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-col gap-4 border-b border-neutral-100 pb-6 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-        <div className="min-w-0 flex-1 space-y-2.5">
-          <h1 className="page-heading break-words text-balance">{group.name}</h1>
-          <div
-            className="flex flex-wrap items-center gap-2"
-            role="list"
-            aria-label="Group category, currency, and size"
-          >
-            <Badge variant="outline" className={cn(groupHeaderMetaClass)} role="listitem">
-              {GROUP_CATEGORIES.find((c) => c.value === group.category)?.label ?? group.category}
-            </Badge>
-            <Badge variant="outline" className={cn(groupHeaderMetaClass, "font-mono tracking-normal")} role="listitem">
-              {group.currency}
-            </Badge>
-            <Badge variant="outline" className={cn(groupHeaderMetaClass)} role="listitem">
-              <Users className="h-3.5 w-3.5 opacity-60" strokeWidth={2} aria-hidden />
-              {members.length} {members.length === 1 ? "member" : "members"}
-            </Badge>
+      <header className="border-b border-neutral-100 pb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+          <div className="min-w-0 flex-1 space-y-2.5">
+            <h1 className="page-heading break-words text-balance">{group.name}</h1>
+            <div
+              className="flex flex-wrap items-center gap-2"
+              role="list"
+              aria-label="Group category, currency, and size"
+            >
+              <Badge variant="outline" className={cn(groupHeaderMetaClass)} role="listitem">
+                {GROUP_CATEGORIES.find((c) => c.value === group.category)?.label ?? group.category}
+              </Badge>
+              <Badge variant="outline" className={cn(groupHeaderMetaClass, "font-mono tracking-normal")} role="listitem">
+                {group.currency}
+              </Badge>
+              <Badge variant="outline" className={cn(groupHeaderMetaClass)} role="listitem">
+                <Users className="h-3.5 w-3.5 opacity-60" strokeWidth={2} aria-hidden />
+                {members.length} {members.length === 1 ? "member" : "members"}
+              </Badge>
+            </div>
+            {group.description ? (
+              <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-600 md:text-base">{group.description}</p>
+            ) : null}
           </div>
-          {group.description ? (
-            <p className="max-w-2xl text-[15px] leading-relaxed text-neutral-600 md:text-base">{group.description}</p>
-          ) : null}
-          <GroupFinancialSnapshot
-            groupCurrency={group.currency}
-            currentUserId={currentUserId}
-            members={members}
-            expenses={expenses}
-            settlements={settlements.map((s) => ({ fromId: s.fromId, toId: s.toId, amount: s.amount }))}
-            balances={balances}
-            youPaySuggestions={youPaySuggestions}
-            youReceiveSuggestions={youReceiveSuggestions}
-          />
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end sm:pt-0.5">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end sm:pt-0.5">
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <Button data-testid="e2e-open-add-expense" onClick={() => setAddOpen(true)}>
               <Plus className="h-4 w-4" />
@@ -517,6 +508,19 @@ export function GroupDetailClient({
               </DropdownMenu>
             ) : null}
           </div>
+        </div>
+        <div className="mt-6 w-full min-w-0">
+          <GroupFinancialSnapshot
+            groupCurrency={group.currency}
+            currentUserId={currentUserId}
+            members={members}
+            expenses={expenses}
+            settlements={settlements.map((s) => ({ fromId: s.fromId, toId: s.toId, amount: s.amount }))}
+            balances={balances}
+            youPaySuggestions={youPaySuggestions}
+            youReceiveSuggestions={youReceiveSuggestions}
+          />
+        </div>
       </header>
 
       <Tabs value={groupTab} onValueChange={(v) => setGroupTab(v as GroupTab)}>

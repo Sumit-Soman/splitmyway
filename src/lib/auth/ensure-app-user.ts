@@ -1,13 +1,12 @@
-import type { RecordModel } from "pocketbase";
-import { createUserPbFromCookies } from "@/lib/pocketbase/server";
-import { recordToAppUser } from "@/lib/pocketbase/user-map";
+import { workerFetchJson } from "@/lib/worker/client";
+import { recordToAppUserFromApi } from "@/lib/worker/user-map";
 import type { AppUser } from "@/lib/pocketbase/user-map";
 
 /**
- * Map PocketBase auth record to app profile (single users collection).
- * `user` may be a POJO when restored from the auth cookie (no `.get()`).
+ * Load the signed-in user's profile from the Worker API.
  */
-export async function ensureAppUserForAuth(user: RecordModel | Record<string, unknown>): Promise<AppUser> {
-  const pb = await createUserPbFromCookies();
-  return recordToAppUser(pb, user);
+export async function ensureAppUserForAuth(user: { id: string }): Promise<AppUser> {
+  void user;
+  const { user: u } = await workerFetchJson<{ user: import("@/lib/worker/user-map").ApiUserPayload }>(`/v1/me`);
+  return recordToAppUserFromApi(u);
 }

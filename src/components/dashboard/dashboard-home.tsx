@@ -331,7 +331,7 @@ export function DashboardHome({
                               youOwe ? "bg-rose-100 text-rose-800" : youGet ? "bg-emerald-100 text-emerald-800" : "bg-neutral-200 text-neutral-700"
                             )}
                           >
-                            {youOwe ? "You pay" : youGet ? "You receive" : "Involves you"}
+                            {youOwe ? "You owe" : youGet ? "Owes you" : "Involves you"}
                           </span>
                         </div>
                       </div>

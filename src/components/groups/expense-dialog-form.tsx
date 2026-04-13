@@ -9,7 +9,13 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { MemberDot, MemberName } from "@/components/shared/member-avatar";
 import { formatCurrency } from "@/lib/utils";
-import { EXPENSE_CATEGORIES, MAX_EXPENSE_ATTACHMENT_BYTES, SPLIT_METHODS, CURRENCIES } from "@/lib/constants";
+import {
+  EXPENSE_CATEGORIES,
+  MAX_EXPENSE_ATTACHMENT_BYTES,
+  MAX_EXPENSE_ATTACHMENT_LABEL,
+  SPLIT_METHODS,
+  CURRENCIES,
+} from "@/lib/constants";
 import { useToast } from "@/components/ui/toast";
 import type { SplitResult } from "@/lib/calculations/splits";
 
@@ -188,7 +194,7 @@ export function ExpenseDialogForm({
         </div>
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor={`attachment-${formKey}`}>Attachment</Label>
-          <p className="text-xs text-neutral-500">Any file type · max 15 MB</p>
+          <p className="text-xs text-neutral-500">Any file type · max {MAX_EXPENSE_ATTACHMENT_LABEL}</p>
           <Input
             id={`attachment-${formKey}`}
             name="attachment"
@@ -200,7 +206,7 @@ export function ExpenseDialogForm({
               if (f && f.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
                 toast({
                   title: "File too large",
-                  description: "Attachments must be 15 MB or smaller.",
+                  description: `Attachments must be ${MAX_EXPENSE_ATTACHMENT_LABEL} or smaller (database limit).`,
                   variant: "destructive",
                 });
                 e.target.value = "";

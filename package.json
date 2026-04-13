@@ -2,6 +2,9 @@
   "name": "splitmyway",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "apps/worker"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,7 +17,10 @@
     "test:e2e:headed": "playwright test --config=tests/e2e/playwright.config.ts --headed",
     "seed": "tsx --env-file=.env scripts/seed-pb.ts",
     "pb:serve": "bash scripts/ensure-pocketbase.sh && ./tools/pocketbase serve --http=127.0.0.1:8090 --dir=./pb_data --migrationsDir=./pb_migrations",
-    "pb:migrate": "bash scripts/ensure-pocketbase.sh && ./tools/pocketbase migrate up --dir=./pb_data --migrationsDir=./pb_migrations"
+    "pb:migrate": "bash scripts/ensure-pocketbase.sh && ./tools/pocketbase migrate up --dir=./pb_data --migrationsDir=./pb_migrations",
+    "worker:dev": "npm run dev -w @splitmyway/worker",
+    "worker:deploy": "npm run deploy -w @splitmyway/worker",
+    "migrate:pb-to-d1": "tsx --env-file=.env scripts/migrate-pocketbase-to-d1.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -22,6 +28,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "decimal.js": "^10.6.0",
+    "jose": "^5.9.6",
     "lucide-react": "^0.577.0",
     "next": "^16.2.1",
     "pocketbase": "^0.26.8",
@@ -32,6 +39,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "better-sqlite3": "^11.8.1",
     "@playwright/test": "^1.51.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/node": "^22.10.0",

@@ -190,7 +190,7 @@ export function GroupBalancesExplainer({
               </div>
               <div className="min-w-0">
                 <SectionLabel>Incoming for you</SectionLabel>
-                <p className="text-sm font-medium leading-snug text-neutral-900">Payments you should receive</p>
+                <p className="text-sm font-medium leading-snug text-neutral-900">Money others should send you</p>
               </div>
             </div>
             {youReceive.length === 0 ? (
@@ -216,10 +216,10 @@ export function GroupBalancesExplainer({
                       />
                       <div className="min-w-0 pt-0.5">
                         <p className="text-sm leading-snug text-neutral-900">
-                          <span className="text-neutral-500">Receive from </span>
                           <MemberName userId={s.fromId} className="font-semibold">
                             {s.fromName}
                           </MemberName>
+                          <span className="text-neutral-500"> should pay you</span>
                         </p>
                         <p className="mt-1.5 text-xs leading-relaxed text-neutral-500">
                           When they pay you this amount, your shared balance moves toward settled.

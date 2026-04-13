@@ -1,17 +1,42 @@
 "use server";
 
-import { getAdminPb } from "@/lib/pocketbase/admin";
 import { requireUser } from "@/lib/auth/server-user";
 import { getRate } from "@/lib/exchange-rates";
 import { calculateSplit } from "@/lib/calculations/splits";
 import { createExpenseSchema, updateExpenseSchema } from "@/lib/validations/expense";
-import { ACTIVITY_TYPES, MAX_EXPENSE_ATTACHMENT_BYTES } from "@/lib/constants";
+import { MAX_EXPENSE_ATTACHMENT_BYTES, MAX_EXPENSE_ATTACHMENT_LABEL } from "@/lib/constants";
 import type { ActionResult } from "@/types";
 import Decimal from "decimal.js";
 import { revalidatePath } from "next/cache";
 import { removeExpenseAndClearSettlementsIfLedgerEmpty } from "@/lib/ledger/expense-deletion";
-import { escapeFilterValue } from "@/lib/pocketbase/filter-escape";
-import { recordField } from "@/lib/pocketbase/record-field";
+import { findMembership } from "@/lib/pocketbase/queries";
+import { WorkerApiError, workerFetchJson } from "@/lib/worker/client";
+
+function expenseApiFailureMessage(err: unknown): string {
+  if (err instanceof WorkerApiError) {
+    const m = err.message;
+    if (
+      /TOOBIG|string or blob too big|ATTACHMENT_TOO_LARGE|database storage limit|D1_ERROR/i.test(m)
+    ) {
+      return `Receipt must be ${MAX_EXPENSE_ATTACHMENT_LABEL} or smaller (storage limit). Remove the file or use a smaller image.`;
+    }
+    return m;
+  }
+  return "Something went wrong. Try again.";
+}
+
+function toMinor(amount: number): number {
+  return Math.round(amount * 100);
+}
+
+async function fileToAttachmentParts(att: File | null): Promise<{ attachmentBase64: string; attachmentMime: string } | null> {
+  if (!att || att.size === 0) return null;
+  if (att.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
+    throw new Error(`Attachment must be ${MAX_EXPENSE_ATTACHMENT_LABEL} or smaller.`);
+  }
+  const buf = Buffer.from(await att.arrayBuffer());
+  return { attachmentBase64: buf.toString("base64"), attachmentMime: att.type || "application/octet-stream" };
+}
 
 export async function createExpense(
   _prev: ActionResult | null,
@@ -60,40 +85,36 @@ export async function createExpense(
     };
   }
 
-  const pb = await getAdminPb();
-  const group = await pb.collection("groups").getOne(parsed.data.groupId);
-  const memRows = await pb.collection("group_members").getFullList({
-    filter: `group = "${escapeFilterValue(parsed.data.groupId)}"`,
-  });
-  const memberIdsSet = new Set(
-    memRows.map((m) => String(recordField(m, "user") ?? "")).filter(Boolean)
-  );
-
-  if (!memberIdsSet.has(user.id)) {
+  const mem = await findMembership(user.id, parsed.data.groupId);
+  if (!mem) {
     return { success: false, error: "Not a member of this group." };
   }
 
-  for (const pid of parsed.data.participantIds) {
-    if (!memberIdsSet.has(pid)) {
-      return { success: false, error: "All participants must be group members." };
-    }
+  let group: { currency: string };
+  try {
+    const res = await workerFetchJson<{ group: { currency: string } }>(
+      `/v1/groups/${encodeURIComponent(parsed.data.groupId)}`
+    );
+    group = res.group;
+  } catch (e) {
+    return { success: false, error: expenseApiFailureMessage(e) };
   }
 
   const inputAmount = parsed.data.amount;
   const expenseCurrency = parsed.data.currency.toUpperCase();
-  const groupCurrency = String(recordField(group, "currency") ?? "").toUpperCase();
+  const groupCurrency = group.currency.toUpperCase();
 
   let convertedAmount = inputAmount;
-  let originalAmount: string | null = null;
+  let originalAmountMinor: number | null = null;
   let originalCurrency: string | null = null;
-  let exchangeRate: string | null = null;
+  let exchangeRateE8: number | null = null;
 
   if (expenseCurrency !== groupCurrency) {
     const rate = await getRate(expenseCurrency, groupCurrency);
     convertedAmount = Math.round(inputAmount * rate * 100) / 100;
-    originalAmount = new Decimal(inputAmount.toFixed(2)).toFixed(2);
+    originalAmountMinor = toMinor(inputAmount);
     originalCurrency = expenseCurrency;
-    exchangeRate = new Decimal(rate.toFixed(8)).toFixed(8);
+    exchangeRateE8 = Math.round(Number(new Decimal(rate.toFixed(8)).toFixed(8)) * 1e8);
   }
 
   const split = calculateSplit({
@@ -109,66 +130,55 @@ export async function createExpense(
     return { success: false, error: split.error };
   }
 
-  const recordFields = {
-    group: parsed.data.groupId,
-    paid_by: parsed.data.paidById,
-    description: parsed.data.description,
-    amount: new Decimal(convertedAmount.toFixed(2)).toFixed(2),
-    currency: groupCurrency,
-    original_amount: originalAmount ?? "",
-    original_currency: originalCurrency ?? "",
-    exchange_rate: exchangeRate ?? "",
-    category: parsed.data.category,
-    date: parsed.data.date.toISOString(),
-    notes: parsed.data.notes ?? "",
-    split_method: parsed.data.splitMethod,
-  };
+  const amountMinor = toMinor(convertedAmount);
+  const exactCents =
+    parsed.data.splitMethod === "exact" && parsed.data.exactAmounts
+      ? Object.fromEntries(
+          Object.entries(parsed.data.exactAmounts).map(([k, v]) => [k, toMinor(v)])
+        )
+      : undefined;
 
   const att = formData.get("attachment");
-  let expense: { id: string };
+  let attachment: { attachmentBase64: string; attachmentMime: string } | null = null;
   if (att instanceof File && att.size > 0) {
-    if (att.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
-      return { success: false, error: "Attachment must be 15 MB or smaller." };
+    try {
+      attachment = await fileToAttachmentParts(att);
+      if (!attachment) {
+        return { success: false, error: "Invalid attachment." };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid attachment.";
+      return { success: false, error: msg };
     }
-    const fd = new FormData();
-    for (const [k, v] of Object.entries(recordFields)) {
-      fd.append(k, v);
-    }
-    fd.append("attachment", att);
-    expense = await pb.collection("expenses").create(fd);
-  } else {
-    expense = await pb.collection("expenses").create(recordFields);
   }
 
-  for (const [uid, amt] of Object.entries(split.amounts)) {
-    const shareVal =
-      parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
-        ? Math.floor(parsed.data.shares[uid])
-        : null;
-    const pctVal =
-      parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
-        ? new Decimal(parsed.data.percentages[uid]!.toFixed(2)).toFixed(2)
-        : "";
-    await pb.collection("expense_participants").create({
-      expense: expense.id,
-      user: uid,
-      amount: new Decimal(amt.toFixed(2)).toFixed(2),
-      shares: shareVal ?? undefined,
-      percentage: pctVal || "",
+  try {
+    await workerFetchJson(`/v1/expenses`, {
+      method: "POST",
+      json: {
+        groupId: parsed.data.groupId,
+        description: parsed.data.description,
+        amountMinor,
+        currency: groupCurrency,
+        category: parsed.data.category,
+        date: parsed.data.date.toISOString(),
+        paidById: parsed.data.paidById,
+        notes: parsed.data.notes ?? null,
+        splitMethod: parsed.data.splitMethod,
+        participantIds: parsed.data.participantIds,
+        originalAmountMinor,
+        originalCurrency,
+        exchangeRateE8,
+        exactCents,
+        percentages: parsed.data.percentages,
+        shares: parsed.data.shares,
+        attachmentBase64: attachment?.attachmentBase64 ?? null,
+        attachmentMime: attachment?.attachmentMime ?? null,
+      },
     });
+  } catch (e) {
+    return { success: false, error: expenseApiFailureMessage(e) };
   }
-
-  await pb.collection("activity_logs").create({
-    user: user.id,
-    group: parsed.data.groupId,
-    type: ACTIVITY_TYPES.EXPENSE_ADDED,
-    metadata: {
-      expenseId: expense.id,
-      description: parsed.data.description,
-      amount: convertedAmount,
-      currency: groupCurrency,
-    },
-  });
 
   revalidatePath(`/groups/${parsed.data.groupId}`);
   revalidatePath("/dashboard");
@@ -223,47 +233,36 @@ export async function updateExpense(
     };
   }
 
-  const pb = await getAdminPb();
-  const existing = await pb.collection("expenses").getOne(parsed.data.expenseId, {
-    expand: "group",
-  });
-  if (String(recordField(existing, "group") ?? "") !== parsed.data.groupId) {
-    return { success: false, error: "Expense does not belong to this group." };
-  }
-
-  const group = await pb.collection("groups").getOne(parsed.data.groupId);
-  const memRows = await pb.collection("group_members").getFullList({
-    filter: `group = "${escapeFilterValue(parsed.data.groupId)}"`,
-  });
-  const memberIdsSet = new Set(
-    memRows.map((m) => String(recordField(m, "user") ?? "")).filter(Boolean)
-  );
-
-  if (!memberIdsSet.has(user.id)) {
+  const mem = await findMembership(user.id, parsed.data.groupId);
+  if (!mem) {
     return { success: false, error: "Not a member of this group." };
   }
 
-  for (const pid of parsed.data.participantIds) {
-    if (!memberIdsSet.has(pid)) {
-      return { success: false, error: "All participants must be group members." };
-    }
+  let group: { currency: string };
+  try {
+    const res = await workerFetchJson<{ group: { currency: string } }>(
+      `/v1/groups/${encodeURIComponent(parsed.data.groupId)}`
+    );
+    group = res.group;
+  } catch (e) {
+    return { success: false, error: expenseApiFailureMessage(e) };
   }
 
   const inputAmount = parsed.data.amount;
   const expenseCurrency = parsed.data.currency.toUpperCase();
-  const groupCurrency = String(recordField(group, "currency") ?? "").toUpperCase();
+  const groupCurrency = group.currency.toUpperCase();
 
   let convertedAmount = inputAmount;
-  let originalAmount: string | null = null;
+  let originalAmountMinor: number | null = null;
   let originalCurrency: string | null = null;
-  let exchangeRate: string | null = null;
+  let exchangeRateE8: number | null = null;
 
   if (expenseCurrency !== groupCurrency) {
     const rate = await getRate(expenseCurrency, groupCurrency);
     convertedAmount = Math.round(inputAmount * rate * 100) / 100;
-    originalAmount = new Decimal(inputAmount.toFixed(2)).toFixed(2);
+    originalAmountMinor = toMinor(inputAmount);
     originalCurrency = expenseCurrency;
-    exchangeRate = new Decimal(rate.toFixed(8)).toFixed(8);
+    exchangeRateE8 = Math.round(Number(new Decimal(rate.toFixed(8)).toFixed(8)) * 1e8);
   }
 
   const split = calculateSplit({
@@ -279,78 +278,64 @@ export async function updateExpense(
     return { success: false, error: split.error };
   }
 
-  const parts = await pb.collection("expense_participants").getFullList({
-    filter: `expense = "${escapeFilterValue(parsed.data.expenseId)}"`,
-  });
-  for (const p of parts) {
-    await pb.collection("expense_participants").delete(p.id);
-  }
-
-  const updateFields = {
-    paid_by: parsed.data.paidById,
-    description: parsed.data.description,
-    amount: new Decimal(convertedAmount.toFixed(2)).toFixed(2),
-    currency: groupCurrency,
-    original_amount: originalAmount ?? "",
-    original_currency: originalCurrency ?? "",
-    exchange_rate: exchangeRate ?? "",
-    category: parsed.data.category,
-    date: parsed.data.date.toISOString(),
-    notes: parsed.data.notes ?? "",
-    split_method: parsed.data.splitMethod,
-  };
+  const amountMinor = toMinor(convertedAmount);
+  const exactCents =
+    parsed.data.splitMethod === "exact" && parsed.data.exactAmounts
+      ? Object.fromEntries(
+          Object.entries(parsed.data.exactAmounts).map(([k, v]) => [k, toMinor(v)])
+        )
+      : undefined;
 
   const newAtt = formData.get("attachment");
   const removeAttachment = formData.get("removeAttachment") === "1";
 
+  let attachmentBase64: string | null = null;
+  let attachmentMime: string | null = null;
   if (newAtt instanceof File && newAtt.size > 0) {
-    if (newAtt.size > MAX_EXPENSE_ATTACHMENT_BYTES) {
-      return { success: false, error: "Attachment must be 15 MB or smaller." };
+    try {
+      const parts = await fileToAttachmentParts(newAtt);
+      if (!parts) {
+        return { success: false, error: "Invalid attachment." };
+      }
+      attachmentBase64 = parts.attachmentBase64;
+      attachmentMime = parts.attachmentMime;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid attachment.";
+      return { success: false, error: msg };
     }
-    const fd = new FormData();
-    for (const [k, v] of Object.entries(updateFields)) {
-      fd.append(k, v);
-    }
-    fd.append("attachment", newAtt);
-    await pb.collection("expenses").update(parsed.data.expenseId, fd);
   } else if (removeAttachment) {
-    await pb.collection("expenses").update(parsed.data.expenseId, {
-      ...updateFields,
-      attachment: "",
-    });
-  } else {
-    await pb.collection("expenses").update(parsed.data.expenseId, updateFields);
+    attachmentBase64 = "";
+    attachmentMime = "";
   }
 
-  for (const [uid, amt] of Object.entries(split.amounts)) {
-    const shareVal =
-      parsed.data.splitMethod === "shares" && parsed.data.shares?.[uid]
-        ? Math.floor(parsed.data.shares[uid])
-        : null;
-    const pctVal =
-      parsed.data.splitMethod === "percentage" && parsed.data.percentages?.[uid] !== undefined
-        ? new Decimal(parsed.data.percentages[uid]!.toFixed(2)).toFixed(2)
-        : "";
-    await pb.collection("expense_participants").create({
-      expense: parsed.data.expenseId,
-      user: uid,
-      amount: new Decimal(amt.toFixed(2)).toFixed(2),
-      shares: shareVal ?? undefined,
-      percentage: pctVal || "",
+  try {
+    await workerFetchJson(`/v1/expenses/${encodeURIComponent(parsed.data.expenseId)}`, {
+      method: "PATCH",
+      json: {
+        expenseId: parsed.data.expenseId,
+        groupId: parsed.data.groupId,
+        description: parsed.data.description,
+        amountMinor,
+        currency: groupCurrency,
+        category: parsed.data.category,
+        date: parsed.data.date.toISOString(),
+        paidById: parsed.data.paidById,
+        notes: parsed.data.notes ?? null,
+        splitMethod: parsed.data.splitMethod,
+        participantIds: parsed.data.participantIds,
+        originalAmountMinor,
+        originalCurrency,
+        exchangeRateE8,
+        exactCents,
+        percentages: parsed.data.percentages,
+        shares: parsed.data.shares,
+        attachmentBase64,
+        attachmentMime,
+      },
     });
+  } catch (e) {
+    return { success: false, error: expenseApiFailureMessage(e) };
   }
-
-  await pb.collection("activity_logs").create({
-    user: user.id,
-    group: parsed.data.groupId,
-    type: ACTIVITY_TYPES.EXPENSE_UPDATED,
-    metadata: {
-      expenseId: parsed.data.expenseId,
-      description: parsed.data.description,
-      amount: convertedAmount,
-      currency: groupCurrency,
-    },
-  });
 
   revalidatePath(`/groups/${parsed.data.groupId}`);
   revalidatePath("/dashboard");
@@ -358,25 +343,11 @@ export async function updateExpense(
 }
 
 export async function deleteExpense(expenseId: string): Promise<ActionResult> {
-  const user = await requireUser();
-  const pb = await getAdminPb();
-  const exp = await pb.collection("expenses").getOne(expenseId);
-  const groupId = String(recordField(exp, "group") ?? "");
-  const memRows = await pb.collection("group_members").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-  });
-  if (!memRows.some((m) => String(recordField(m, "user") ?? "") === user.id)) {
-    return { success: false, error: "Forbidden." };
-  }
-
-  const clearedSettlements = await removeExpenseAndClearSettlementsIfLedgerEmpty(expenseId, groupId);
-
-  await pb.collection("activity_logs").create({
-    user: user.id,
-    group: groupId,
-    type: ACTIVITY_TYPES.EXPENSE_DELETED,
-    metadata: { expenseId, description: String(recordField(exp, "description") ?? "") },
-  });
+  await requireUser();
+  const { clearedSettlements, groupId } = await removeExpenseAndClearSettlementsIfLedgerEmpty(
+    expenseId,
+    ""
+  );
 
   revalidatePath(`/groups/${groupId}`);
   revalidatePath("/dashboard");

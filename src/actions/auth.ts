@@ -1,8 +1,7 @@
 "use server";
 
-import PocketBase, { ClientResponseError } from "pocketbase";
-import { getPocketBaseUrl } from "@/lib/pocketbase/server";
-import { clearPbAuthCookie, setPbAuthCookie } from "@/lib/pocketbase/cookies";
+import { WorkerApiError, workerPostPublicJson } from "@/lib/worker/client";
+import { setSessionToken, clearSessionToken } from "@/lib/auth/session-cookie";
 import { getAuthUser } from "@/lib/auth/server-user";
 import { ensureAppUserForAuth } from "@/lib/auth/ensure-app-user";
 import {
@@ -13,7 +12,6 @@ import {
 } from "@/lib/validations/auth";
 import type { ActionResult } from "@/types";
 import { redirect, unstable_rethrow } from "next/navigation";
-import { createUserPbFromCookies } from "@/lib/pocketbase/server";
 
 export async function login(
   _prevState: ActionResult | null,
@@ -33,21 +31,19 @@ export async function login(
   }
 
   try {
-    const pb = new PocketBase(getPocketBaseUrl());
-    const password = parsed.data.password.trim();
-    await pb.collection("users").authWithPassword(parsed.data.email, password);
-    await setPbAuthCookie(pb);
-    if (pb.authStore.record) {
-      await ensureAppUserForAuth(pb.authStore.record);
-    }
+    const data = await workerPostPublicJson<{
+      token: string;
+      user: { id: string; email: string; name: string | null };
+    }>("/v1/auth/login", {
+      email: parsed.data.email,
+      password: parsed.data.password.trim(),
+    });
+    await setSessionToken(data.token);
+    await ensureAppUserForAuth({ id: data.user.id });
   } catch (e) {
     unstable_rethrow(e);
-    if (e instanceof ClientResponseError) {
-      const msg =
-        (e.response as { message?: string } | undefined)?.message ??
-        e.message ??
-        "Sign in failed.";
-      return { success: false, error: msg };
+    if (e instanceof WorkerApiError) {
+      return { success: false, error: e.message };
     }
     const err = e as { message?: string };
     return { success: false, error: err.message ?? "Sign in failed." };
@@ -77,32 +73,30 @@ export async function signup(
   }
 
   try {
-    const pb = new PocketBase(getPocketBaseUrl());
-    await pb.collection("users").create({
+    const data = await workerPostPublicJson<{
+      token: string;
+      user: { id: string };
+    }>("/v1/auth/signup", {
+      name: parsed.data.name,
       email: parsed.data.email,
       password: parsed.data.password,
-      passwordConfirm: parsed.data.password,
-      name: parsed.data.name,
-      currency: "USD",
     });
-    await pb.collection("users").authWithPassword(parsed.data.email, parsed.data.password);
-    await setPbAuthCookie(pb);
-    if (pb.authStore.record) {
-      await ensureAppUserForAuth(pb.authStore.record);
-    }
+    await setSessionToken(data.token);
+    await ensureAppUserForAuth({ id: data.user.id });
   } catch (e) {
     unstable_rethrow(e);
-    const err = e as { message?: string; data?: { data?: { email?: { message?: string } } } };
-    const msg =
-      err.data?.data?.email?.message ?? err.message ?? "Could not create account.";
-    return { success: false, error: msg };
+    if (e instanceof WorkerApiError) {
+      return { success: false, error: e.message };
+    }
+    const err = e as { message?: string };
+    return { success: false, error: err.message ?? "Could not create account." };
   }
 
   redirect("/dashboard");
 }
 
 export async function logout(): Promise<void> {
-  await clearPbAuthCookie();
+  await clearSessionToken();
   redirect("/");
 }
 
@@ -120,16 +114,11 @@ export async function forgotPassword(
     };
   }
 
-  try {
-    const pb = new PocketBase(getPocketBaseUrl());
-    await pb.collection("users").requestPasswordReset(parsed.data.email);
-  } catch (e) {
-    unstable_rethrow(e);
-    const err = e as { message?: string };
-    return { success: false, error: err.message ?? "Request failed." };
-  }
-
-  return { success: true, message: "Check your email for a password reset link." };
+  return {
+    success: true,
+    message:
+      "Password reset email is not wired to the Worker backend yet. Ask an admin to rotate your password in D1 or use a direct DB update.",
+  };
 }
 
 export async function changePassword(
@@ -159,18 +148,24 @@ export async function changePassword(
   }
 
   try {
-    const pb = await createUserPbFromCookies();
-    if (!pb.authStore.record) {
-      return { success: false, error: "Unauthorized" };
-    }
-    await pb.collection("users").update(pb.authStore.record.id, {
-      oldPassword: parsed.data.currentPassword,
-      password: parsed.data.newPassword,
-      passwordConfirm: parsed.data.confirmPassword,
+    const { workerFetchJson } = await import("@/lib/worker/client");
+    const { token } = await workerFetchJson<{ token: string }>(`/v1/me/password`, {
+      method: "POST",
+      json: {
+        currentPassword: parsed.data.currentPassword,
+        newPassword: parsed.data.newPassword,
+      },
     });
-    await setPbAuthCookie(pb);
+    await setSessionToken(token);
   } catch (e) {
     unstable_rethrow(e);
+    if (e instanceof WorkerApiError) {
+      return {
+        success: false,
+        error: e.message,
+        fieldErrors: { currentPassword: ["Check your current password."] },
+      };
+    }
     const err = e as { message?: string };
     return {
       success: false,
@@ -185,5 +180,12 @@ export async function changePassword(
 export async function getCurrentUser() {
   const user = await getAuthUser();
   if (!user) return null;
-  return ensureAppUserForAuth(user);
+  try {
+    return await ensureAppUserForAuth(user);
+  } catch (e) {
+    if (e instanceof WorkerApiError && e.status === 404) {
+      redirect("/api/auth/session-reset");
+    }
+    throw e;
+  }
 }

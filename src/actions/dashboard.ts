@@ -12,7 +12,7 @@ export async function getDashboardData() {
   const user = await perf("getAuthUser", () => getAuthUser());
   if (!user) return null;
 
-  const [dbUser, groupsData] = await perf("pocketbase dashboard queries", () =>
+  const [dbUser, groupsData] = await perf("worker dashboard queries", () =>
     Promise.all([getDbUserById(user.id), loadGroupsDataForUser(user.id)])
   );
 

@@ -1,0 +1,16 @@
+{
+  "name": "splitmyway-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "splitmyway",
+      "database_id": "e3b94bb3-4292-492d-87b4-b3d2a6aebf75",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "CORS_ORIGINS": "http://localhost:3000,http://127.0.0.1:3000"
+  }
+}

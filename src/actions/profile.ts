@@ -1,10 +1,10 @@
 "use server";
 
-import { getAuthUser, getDbUserById } from "@/lib/auth/server-user";
+import { getAuthUser } from "@/lib/auth/server-user";
 import { z } from "zod";
 import type { ActionResult } from "@/types";
 import { revalidatePath } from "next/cache";
-import { getAdminPb } from "@/lib/pocketbase/admin";
+import { workerFetchJson } from "@/lib/worker/client";
 
 const profileSchema = z.object({
   name: z.string().min(1).max(120),
@@ -32,10 +32,12 @@ export async function updateProfile(
     };
   }
 
-  const pb = await getAdminPb();
-  await pb.collection("users").update(user.id, {
-    name: parsed.data.name,
-    currency: parsed.data.currency.toUpperCase(),
+  await workerFetchJson(`/v1/me`, {
+    method: "PATCH",
+    json: {
+      name: parsed.data.name,
+      currency: parsed.data.currency.toUpperCase(),
+    },
   });
 
   revalidatePath("/settings");
@@ -48,5 +50,6 @@ export async function getProfile() {
   const user = await getAuthUser();
   if (!user) return null;
 
-  return getDbUserById(user.id);
+  const { getAppUserById } = await import("@/lib/pocketbase/queries");
+  return getAppUserById(user.id);
 }

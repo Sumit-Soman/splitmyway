@@ -1,21 +1,13 @@
 import { NextResponse } from "next/server";
-import PocketBase from "pocketbase";
-import { normalizePocketBaseUrl } from "@/lib/pocketbase/url";
 
+/**
+ * Legacy PocketBase email verification callback. Auth is handled by the Worker now.
+ */
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
-  const next = searchParams.get("next") ?? "/dashboard";
-  const token = searchParams.get("token");
-
-  const url = normalizePocketBaseUrl(process.env.POCKETBASE_URL);
-  if (token && url) {
-    const pb = new PocketBase(url);
-    try {
-      await pb.collection("users").confirmVerification(token);
-    } catch {
-      /* invalid or non-verification token — still redirect home */
-    }
+  const url = new URL(request.url);
+  const token = url.searchParams.get("token");
+  if (!token) {
+    return NextResponse.redirect(new URL("/login", request.url));
   }
-
-  return NextResponse.redirect(`${origin}${next.startsWith("/") ? next : "/dashboard"}`);
+  return NextResponse.redirect(new URL("/login?notice=verify-legacy", request.url));
 }

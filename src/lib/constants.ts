@@ -46,8 +46,14 @@ export const SPLIT_METHODS = [
 /** Profile photo uploads (server + client checks). */
 export const MAX_PROFILE_AVATAR_BYTES = 2 * 1024 * 1024;
 
-/** Expense receipt / attachment uploads (must stay within PocketBase file field max). */
-export const MAX_EXPENSE_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+/**
+ * Expense receipt uploads. Cloudflare D1 allows ~2 MB per BLOB/cell (SQLITE_TOOBIG above that).
+ * @see https://developers.cloudflare.com/d1/platform/limits/
+ */
+export const MAX_EXPENSE_ATTACHMENT_BYTES = Math.floor(1.5 * 1024 * 1024);
+
+/** Copy for labels and toasts (keep in sync with {@link MAX_EXPENSE_ATTACHMENT_BYTES}). */
+export const MAX_EXPENSE_ATTACHMENT_LABEL = "1.5 MB";
 
 export const ACTIVITY_TYPES = {
   EXPENSE_ADDED: "expense_added",

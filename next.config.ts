@@ -5,8 +5,8 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   experimental: {
     serverActions: {
-      /** Multipart overhead; avatar 2 MB; expense attachments up to 15 MB. */
-      bodySizeLimit: "20mb",
+      /** Multipart overhead; expense receipts ~1.5 MB + base64; avatar 2 MB. */
+      bodySizeLimit: "8mb",
     },
   },
 };

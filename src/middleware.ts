@@ -1,8 +1,8 @@
 import { type NextRequest } from "next/server";
-import { updatePocketBaseSession } from "@/lib/pocketbase/middleware";
+import { updateSessionGate } from "@/lib/auth/middleware-session";
 
 export async function middleware(request: NextRequest) {
-  return updatePocketBaseSession(request);
+  return updateSessionGate(request);
 }
 
 export const config = {

@@ -1,460 +1,315 @@
-import type PocketBase from "pocketbase";
 import type { RecordModel } from "pocketbase";
-import { getAdminPb } from "./admin";
-import { publicUserFromRecord, recordToAppUser } from "./user-map";
-import { fileFieldName, recordField } from "./record-field";
+import { workerFetchJson } from "@/lib/worker/client";
+import { recordToAppUserFromApi } from "@/lib/worker/user-map";
 import { toNumber } from "@/lib/utils";
-import { escapeFilterValue } from "./filter-escape";
-import { calculateBalances, minimizeDebts } from "@/lib/calculations/balances";
-
-/** Relation id or any field string (SDK records may be plain objects without `.get`). */
-function relId(r: unknown, field: string): string {
-  return String(recordField(r, field) ?? "");
-}
 
 function fs(r: unknown, key: string): string {
-  return String(recordField(r, key) ?? "");
+  return String((r as Record<string, unknown>)?.[key] ?? "");
 }
 
 function fsn(r: unknown, key: string): string | null {
-  const v = recordField(r, key);
+  const v = (r as Record<string, unknown>)?.[key];
   if (v == null || v === "") return null;
   return String(v);
 }
 
 function recordEmail(r: unknown): string {
-  return String(recordField(r, "email") ?? "");
+  return String((r as Record<string, unknown>)?.email ?? "");
 }
 
-export async function getUserRecordById(pb: PocketBase, id: string) {
-  return pb.collection("users").getOne(id);
-}
+type ApiUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  currency: string;
+  avatarUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export async function getAppUserById(id: string) {
-  const pb = await getAdminPb();
-  const r = await getUserRecordById(pb, id);
-  return recordToAppUser(pb, r);
+  const { user } = await workerFetchJson<{ user: ApiUser }>(`/v1/users/by-id/${id}`);
+  return recordToAppUserFromApi(user);
 }
 
-/** Membership rows for a user, newest first. */
 export async function listMembershipsForUser(userId: string) {
-  const pb = await getAdminPb();
-  const rows = await pb.collection("group_members").getFullList({
-    filter: `user = "${escapeFilterValue(userId)}"`,
-    sort: "-joined_at",
-    expand: "group",
-  });
-  return rows.map((m) => ({
+  const { memberships } = await workerFetchJson<{
+    memberships: Array<{
+      id: string;
+      userId: string;
+      groupId: string;
+      role: string;
+      joinedAt: string;
+      group: { id: string; name: string; currency: string };
+    }>;
+  }>(`/v1/me/memberships`);
+  return memberships.map((m) => ({
     id: m.id,
-    userId: relId(m, "user"),
-    groupId: relId(m, "group"),
-    role: fs(m, "role"),
-    joinedAt: new Date(fs(m, "joined_at")),
-    group: m.expand?.group as RecordModel | undefined,
+    userId: m.userId,
+    groupId: m.groupId,
+    role: m.role,
+    joinedAt: new Date(m.joinedAt),
+    group: m.group as unknown as RecordModel,
   }));
 }
 
 export async function findMembership(userId: string, groupId: string) {
-  const pb = await getAdminPb();
-  const rows = await pb.collection("group_members").getFullList({
-    filter: `user = "${escapeFilterValue(userId)}" && group = "${escapeFilterValue(groupId)}"`,
-    limit: 1,
-  });
-  return rows[0] ?? null;
+  const rows = await listMembershipsForUser(userId);
+  return rows.find((r) => r.groupId === groupId) ?? null;
 }
 
-export async function loadGroupDetailBundle(groupId: string) {
-  const pb = await getAdminPb();
-  const g = await pb.collection("groups").getOne(groupId);
-
-  const members = await pb.collection("group_members").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-    expand: "user",
-  });
-
-  const expenses = await pb.collection("expenses").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-    sort: "-date",
-    expand: "paid_by",
-  });
-
-  const participantsByExpense = new Map<string, RecordModel[]>();
-  for (const e of expenses) {
-    const parts = await pb.collection("expense_participants").getFullList({
-      filter: `expense = "${escapeFilterValue(e.id)}"`,
-      expand: "user",
-    });
-    participantsByExpense.set(e.id, parts);
-  }
-
-  const settlements = await pb.collection("settlements").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-    sort: "-settled_at",
-    expand: "from_user,to_user",
-  });
-
-  const invitations = await pb.collection("invitations").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}" && status = "pending"`,
-  });
-
-  return {
-    group: g,
-    members,
-    expenses,
-    participantsByExpense,
-    settlements,
-    invitations,
-  };
-}
-
-/** Full group data for dashboard / balance math. */
 export async function loadGroupsDataForUser(userId: string) {
-  const pb = await getAdminPb();
-  const memberships = await listMembershipsForUser(userId);
-  const groupIds = memberships.map((m) => m.groupId);
-  if (groupIds.length === 0) return [];
-
-  type MemberRow = {
-    id: string;
-    userId: string;
-    user: { id: string; name: string | null; email: string; avatarUrl: string | null };
-  };
-
-  type ExpRow = {
-    id: string;
-    paidById: string;
-    amount: string;
-    currency: string;
-    participants: Array<{ userId: string; amount: string }>;
-  };
-
-  const out: Array<{
-    id: string;
-    name: string;
-    description: string | null;
-    category: string;
-    currency: string;
-    members: MemberRow[];
-    expenses: ExpRow[];
-    settlements: Array<{ id: string; fromId: string; toId: string; amount: string; currency: string }>;
-  }> = [];
-
-  for (const gid of groupIds) {
-    const g = await pb.collection("groups").getOne(gid);
-    const memRows = await pb.collection("group_members").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-      expand: "user",
-    });
-    const expRows = await pb.collection("expenses").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-      expand: "paid_by",
-    });
-    const expenses: ExpRow[] = [];
-
-    for (const e of expRows) {
-      const plist = await pb.collection("expense_participants").getFullList({
-        filter: `expense = "${escapeFilterValue(e.id)}"`,
-      });
-      expenses.push({
-        id: e.id,
-        paidById: relId(e, "paid_by"),
-        amount: fs(e, "amount"),
-        currency: fs(e, "currency"),
-        participants: plist.map((p) => ({
-          userId: relId(p, "user"),
-          amount: fs(p, "amount"),
-        })),
-      });
-    }
-
-    const setRows = await pb.collection("settlements").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-    });
-
-    out.push({
-      id: g.id,
-      name: fs(g, "name"),
-      description: fsn(g, "description"),
-      category: fs(g, "category"),
-      currency: fs(g, "currency"),
-      members: memRows.map((m) => {
-        const u = m.expand?.user as RecordModel;
-        return {
-          id: m.id,
-          userId: relId(m, "user"),
-          user: publicUserFromRecord(pb, u),
-        };
-      }),
-      expenses,
-      settlements: setRows.map((s) => ({
-        id: s.id,
-        fromId: relId(s, "from_user"),
-        toId: relId(s, "to_user"),
-        amount: fs(s, "amount"),
-        currency: fs(s, "currency"),
-      })),
-    });
-  }
-
-  const order = new Map(groupIds.map((id, i) => [id, i]));
-  out.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-  return out;
+  const { groupsData } = await workerFetchJson<{
+    groupsData: Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      category: string;
+      currency: string;
+      members: Array<{
+        id: string;
+        userId: string;
+        user: { id: string; name: string | null; email: string; avatarUrl: string | null };
+      }>;
+      expenses: Array<{
+        id: string;
+        paidById: string;
+        amount: string;
+        currency: string;
+        participants: Array<{ userId: string; amount: string }>;
+      }>;
+      settlements: Array<{
+        id: string;
+        fromId: string;
+        toId: string;
+        amount: string;
+        currency: string;
+      }>;
+    }>;
+  }>(`/v1/dashboard`);
+  void userId;
+  return groupsData;
 }
 
-/** Rich export shape for PDF/CSV routes (per-group expenses with user labels). */
 export async function loadGroupsExportData(userId: string, allowedGroupIds: string[]) {
-  const pb = await getAdminPb();
-  const memberships = await listMembershipsForUser(userId);
+  void userId;
+  if (allowedGroupIds.length === 0) return [];
   const allowed = new Set(allowedGroupIds);
-  const groupIds = memberships.map((m) => m.groupId).filter((id) => allowed.has(id));
-  if (groupIds.length === 0) return [];
+  const qs =
+    allowedGroupIds.length === 1
+      ? `?groupId=${encodeURIComponent(allowedGroupIds[0]!)}`
+      : allowedGroupIds.length > 1
+        ? `?groupIds=${encodeURIComponent(allowedGroupIds.join(","))}`
+        : "";
+  const { sections } = await workerFetchJson<{
+    sections: Array<{
+      groupId: string;
+      name: string;
+      currency: string;
+      balances: Array<{ userId: string; name: string | null; email: string }>;
+      expenses: Array<{
+        id: string;
+        description: string;
+        amount: string;
+        currency: string;
+        originalAmount: string | null;
+        originalCurrency: string | null;
+        exchangeRate: string | null;
+        category: string;
+        date: string;
+        splitMethod: string;
+        paidBy: { id: string; name: string | null; email: string };
+        participants: Array<{
+          userId: string;
+          amount: string;
+          user: { email: string; name: string | null };
+        }>;
+      }>;
+      settlements: Array<{
+        id: string;
+        fromId: string;
+        toId: string;
+        amount: number;
+        settledAt: string;
+        notes: string | null;
+        from: { email: string; name: string | null };
+        to: { email: string; name: string | null };
+      }>;
+    }>;
+  }>(`/v1/reports${qs}`);
 
-  const groups = [];
-  for (const gid of groupIds) {
-    const g = await pb.collection("groups").getOne(gid);
-    const memRows = await pb.collection("group_members").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-      expand: "user",
-    });
-    const memberByUserId = new Map(
-      memRows.map((m) => {
-        const u = m.expand?.user as RecordModel;
-        return [
-          relId(m, "user"),
-          { name: fsn(u, "name"), email: recordEmail(u) },
-        ] as const;
-      })
-    );
-
-    const expRows = await pb.collection("expenses").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-      sort: "date",
-      expand: "paid_by",
-    });
-
-    const expensesOut = [];
-    for (const e of expRows) {
-      const paidBy = e.expand?.paid_by as RecordModel;
-      const plist = await pb.collection("expense_participants").getFullList({
-        filter: `expense = "${escapeFilterValue(e.id)}"`,
-        expand: "user",
-      });
-      expensesOut.push({
-        id: e.id,
-        description: fs(e, "description"),
-        amount: fs(e, "amount"),
-        currency: fs(e, "currency"),
-        originalAmount: fsn(e, "original_amount"),
-        originalCurrency: fsn(e, "original_currency"),
-        exchangeRate: fsn(e, "exchange_rate"),
-        category: fs(e, "category"),
-        date: new Date(fs(e, "date")),
-        splitMethod: fs(e, "split_method"),
-        paidBy: { id: paidBy.id, name: fsn(paidBy, "name"), email: recordEmail(paidBy) },
-        participants: plist.map((p) => {
-          const u = p.expand?.user as RecordModel | undefined;
-          const uid = relId(p, "user");
-          return {
-            userId: uid,
-            amount: fs(p, "amount"),
-            user: u
-              ? { email: recordEmail(u), name: fsn(u, "name") }
-              : { email: memberByUserId.get(uid)?.email ?? "", name: memberByUserId.get(uid)?.name ?? null },
-          };
-        }),
-      });
-    }
-
-    const setRows = await pb.collection("settlements").getFullList({
-      filter: `group = "${escapeFilterValue(gid)}"`,
-      sort: "-settled_at",
-      expand: "from_user,to_user",
-    });
-
-    groups.push({
-      id: g.id,
-      name: fs(g, "name"),
-      currency: fs(g, "currency"),
-      members: memRows.map((m) => ({
-        userId: relId(m, "user"),
-        user: publicUserFromRecord(pb, m.expand?.user as RecordModel),
+  return sections
+    .filter((s) => allowed.has(s.groupId))
+    .map((g) => ({
+      id: g.groupId,
+      name: g.name,
+      currency: g.currency,
+      members: g.balances.map((m) => ({
+        userId: m.userId,
+        user: {
+          name: m.name,
+          email: m.email,
+          avatarUrl: null,
+        },
       })),
-      expenses: expensesOut,
-      settlements: setRows.map((s) => {
-        const from = s.expand?.from_user as RecordModel;
-        const to = s.expand?.to_user as RecordModel;
-        return {
-          id: s.id,
-          fromId: from.id,
-          toId: to.id,
-          amount: fs(s, "amount"),
-          settledAt: new Date(fs(s, "settled_at")),
-          notes: fsn(s, "notes"),
-          from: { email: recordEmail(from), name: fsn(from, "name") },
-          to: { email: recordEmail(to), name: fsn(to, "name") },
-        };
-      }),
-    });
-  }
-
-  return groups;
+      expenses: g.expenses.map((e) => ({
+        id: e.id,
+        description: e.description,
+        amount: e.amount,
+        currency: e.currency,
+        originalAmount: e.originalAmount,
+        originalCurrency: e.originalCurrency,
+        exchangeRate: e.exchangeRate,
+        category: e.category,
+        date: new Date(e.date),
+        splitMethod: e.splitMethod,
+        paidBy: e.paidBy,
+        participants: e.participants,
+      })),
+      settlements: g.settlements.map((s) => ({
+        id: s.id,
+        fromId: s.fromId,
+        toId: s.toId,
+        amount: String(s.amount),
+        settledAt: new Date(s.settledAt),
+        notes: s.notes,
+        from: s.from,
+        to: s.to,
+      })),
+    }));
 }
 
-/** Serialized group detail for the group page. */
 export async function getGroupDetailSerialized(groupId: string, userId: string) {
-  const pb = await getAdminPb();
-  const membership = await findMembership(userId, groupId);
-  if (!membership) return null;
+  const { detail } = await workerFetchJson<{ detail: Record<string, unknown> }>(
+    `/v1/groups/${encodeURIComponent(groupId)}/detail`
+  );
+  void userId;
+  const role = String(detail.role ?? "");
+  const currentUserId = String(detail.currentUserId ?? "");
+  const group = detail.group as Record<string, unknown>;
+  const members = detail.members as Array<Record<string, unknown>>;
+  const invitations = detail.invitations as Array<Record<string, unknown>>;
+  const expensesRaw = detail.expenses as Array<Record<string, unknown>>;
+  const balancesRaw = detail.balances as Array<Record<string, unknown>>;
+  const suggestions = detail.suggestions as Array<Record<string, unknown>>;
+  const settlementsRaw = detail.settlements as Array<Record<string, unknown>>;
 
-  const bundle = await loadGroupDetailBundle(groupId);
-  const g = bundle.group;
+  const memberIds = members.map((m) => String(m.userId));
 
-  const memberRows = bundle.members.map((m) => {
-    const u = m.expand?.user as RecordModel;
-    const av = fsn(u, "avatar");
+  const expenses = expensesRaw.map((e) => {
+    const paidByObj = e.paidBy as Record<string, unknown>;
     return {
-      id: m.id,
-      userId: relId(m, "user"),
-      role: fs(m, "role"),
-      name: fsn(u, "name"),
-      email: recordEmail(u),
-      avatarUrl: av ? pb.files.getUrl(u as Record<string, unknown>, av) : null,
-    };
-  });
-
-  const memberIds = memberRows.map((m) => m.userId);
-
-  const expenses = bundle.expenses.map((e) => {
-    const paidBy = e.expand?.paid_by as RecordModel;
-    const plist = bundle.participantsByExpense.get(e.id) ?? [];
-    const paidAv = fsn(paidBy, "avatar");
-    return {
-      id: e.id,
+      id: String(e.id),
       description: fs(e, "description"),
-      amount: toNumber(fs(e, "amount")),
+      amount: toNumber(String(e.amount)),
       currency: fs(e, "currency"),
-      originalAmount: recordField(e, "original_amount") ? toNumber(fs(e, "original_amount")) : null,
-      originalCurrency: fsn(e, "original_currency"),
-      exchangeRate: recordField(e, "exchange_rate") ? toNumber(fs(e, "exchange_rate")) : null,
+      originalAmount: e.originalAmount != null ? toNumber(String(e.originalAmount)) : null,
+      originalCurrency: fsn(e, "originalCurrency"),
+      exchangeRate: e.exchangeRate != null ? toNumber(String(e.exchangeRate)) : null,
       category: fs(e, "category"),
       date: new Date(fs(e, "date")),
       notes: fsn(e, "notes"),
-      attachmentFileName: fileFieldName(e, "attachment"),
-      splitMethod: fs(e, "split_method"),
-      paidById: relId(e, "paid_by"),
+      attachmentFileName: fsn(e, "attachmentFileName"),
+      splitMethod: fs(e, "splitMethod"),
+      paidById: fs(e, "paidById"),
       paidBy: {
-        id: paidBy.id,
-        name: fsn(paidBy, "name"),
-        email: recordEmail(paidBy),
-        avatarUrl: paidAv ? pb.files.getUrl(paidBy as Record<string, unknown>, paidAv) : null,
+        id: String(paidByObj.id ?? fs(e, "paidById")),
+        name: fsn(paidByObj, "name"),
+        email: fs(paidByObj, "email"),
+        avatarUrl: fsn(paidByObj, "avatarUrl"),
       },
-      participants: plist.map((p) => {
-        const u = p.expand?.user as RecordModel;
-        const sh = recordField(p, "shares");
-        const shares =
-          typeof sh === "number" ? sh : sh != null && sh !== "" ? Number(sh) : null;
-        const pct = fsn(p, "percentage");
-        const uAv = fsn(u, "avatar");
+      participants: (e.participants as Array<Record<string, unknown>>).map((p) => {
+        const u = p.user as Record<string, unknown>;
         return {
-          id: p.id,
-          userId: relId(p, "user"),
-          amount: toNumber(fs(p, "amount")),
-          shares,
-          percentage: pct ? toNumber(pct) : null,
+          id: String(p.id),
+          userId: fs(p, "userId"),
+          amount: toNumber(String(p.amount)),
+          shares: typeof p.shares === "number" ? p.shares : p.shares != null ? Number(p.shares) : null,
+          percentage: p.percentage != null ? toNumber(String(p.percentage)) : null,
           user: {
-            id: u.id,
+            id: String(u.id ?? ""),
             name: fsn(u, "name"),
-            email: recordEmail(u),
-            avatarUrl: uAv ? pb.files.getUrl(u as Record<string, unknown>, uAv) : null,
+            email: fs(u, "email"),
+            avatarUrl: fsn(u, "avatarUrl"),
           },
         };
       }),
     };
   });
 
-  const settlements = bundle.settlements.map((s) => {
-    const from = s.expand?.from_user as RecordModel;
-    const to = s.expand?.to_user as RecordModel;
-    const fromAv = fsn(from, "avatar");
-    const toAv = fsn(to, "avatar");
+  const settlements = settlementsRaw.map((s) => {
+    const from = s.from as Record<string, unknown>;
+    const to = s.to as Record<string, unknown>;
     return {
-      id: s.id,
-      fromId: relId(s, "from_user"),
-      toId: relId(s, "to_user"),
-      amount: toNumber(fs(s, "amount")),
+      id: String(s.id),
+      fromId: fs(s, "fromId"),
+      toId: fs(s, "toId"),
+      amount: toNumber(String(s.amount)),
       currency: fs(s, "currency"),
       notes: fsn(s, "notes"),
-      settledAt: new Date(fs(s, "settled_at")),
+      settledAt: new Date(fs(s, "settledAt")),
       from: {
         name: fsn(from, "name"),
-        email: recordEmail(from),
-        avatarUrl: fromAv ? pb.files.getUrl(from as Record<string, unknown>, fromAv) : null,
+        email: fs(from, "email"),
+        avatarUrl: fsn(from, "avatarUrl"),
       },
       to: {
         name: fsn(to, "name"),
-        email: recordEmail(to),
-        avatarUrl: toAv ? pb.files.getUrl(to as Record<string, unknown>, toAv) : null,
+        email: fs(to, "email"),
+        avatarUrl: fsn(to, "avatarUrl"),
       },
     };
   });
 
-  const balancesMap = calculateBalances({
-    memberIds,
-    expenses: expenses.map((e) => ({
-      paidById: e.paidById,
-      participants: e.participants.map((p) => ({
-        userId: p.userId,
-        amount: p.amount,
-      })),
-    })),
-    settlements: settlements.map((s) => ({
-      fromId: s.fromId,
-      toId: s.toId,
-      amount: s.amount,
-    })),
-  });
-
-  const suggestions = minimizeDebts(balancesMap);
+  const suggestionsRaw = detail.suggestions as Array<{
+    fromId: string;
+    toId: string;
+    amount: number;
+    fromName: string;
+    toName: string;
+  }>;
 
   return {
-    role: fs(membership, "role"),
-    currentUserId: userId,
+    role,
+    currentUserId,
     group: {
-      id: g.id,
-      name: fs(g, "name"),
-      description: fsn(g, "description"),
-      category: fs(g, "category"),
-      currency: fs(g, "currency"),
+      id: String(group.id),
+      name: fs(group, "name"),
+      description: fsn(group, "description"),
+      category: fs(group, "category"),
+      currency: fs(group, "currency"),
     },
-    members: memberRows,
-    invitations: bundle.invitations.map((i) => ({
-      id: i.id,
+    members: members.map((m) => ({
+      id: String(m.id),
+      userId: String(m.userId),
+      role: fs(m, "role"),
+      name: fsn(m, "name"),
+      email: fs(m, "email"),
+      avatarUrl: fsn(m, "avatarUrl"),
+    })),
+    invitations: invitations.map((i) => ({
+      id: String(i.id),
       email: fsn(i, "email"),
       status: fs(i, "status"),
-      expiresAt: new Date(fs(i, "expires_at")).toISOString(),
+      expiresAt: new Date(fs(i, "expiresAt")).toISOString(),
     })),
     expenses,
     balances: memberIds.map((uid) => {
-      const m = memberRows.find((x) => x.userId === uid)!;
+      const m = members.find((x) => String(x.userId) === uid)!;
+      const br = balancesRaw.find((b) => String(b.userId) === uid);
       return {
         userId: uid,
-        name: m.name,
-        email: m.email,
-        balance: balancesMap[uid] ?? 0,
+        name: fsn(m, "name"),
+        email: fs(m, "email"),
+        balance: br != null ? toNumber(String(br.balance)) : 0,
       };
     }),
-    suggestions: suggestions.map((s) => ({
+    suggestions: suggestionsRaw.map((s) => ({
       fromId: s.fromId,
       toId: s.toId,
       amount: s.amount,
-      fromName:
-        memberRows.find((m) => m.userId === s.fromId)?.name ??
-        memberRows.find((m) => m.userId === s.fromId)?.email ??
-        "",
-      toName:
-        memberRows.find((m) => m.userId === s.toId)?.name ??
-        memberRows.find((m) => m.userId === s.toId)?.email ??
-        "",
+      fromName: s.fromName,
+      toName: s.toName,
     })),
     settlements,
   };

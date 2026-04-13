@@ -1,30 +1,14 @@
-import { getAdminPb } from "@/lib/pocketbase/admin";
-import { escapeFilterValue } from "@/lib/pocketbase/filter-escape";
+import { workerFetchJson } from "@/lib/worker/client";
 
 /**
- * Deletes an expense. If the group has no expenses left, removes all settlements for that group.
+ * Deletes an expense via the Worker API. If the group has no expenses left, the Worker clears payments.
  */
 export async function removeExpenseAndClearSettlementsIfLedgerEmpty(
   expenseId: string,
-  groupId: string
-): Promise<boolean> {
-  const pb = await getAdminPb();
-  await pb.collection("expenses").delete(expenseId);
-
-  const remaining = await pb.collection("expenses").getList(1, 1, {
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-  });
-  if (remaining.totalItems > 0) {
-    return false;
-  }
-
-  const settlements = await pb.collection("settlements").getFullList({
-    filter: `group = "${escapeFilterValue(groupId)}"`,
-  });
-  let cleared = false;
-  for (const s of settlements) {
-    await pb.collection("settlements").delete(s.id);
-    cleared = true;
-  }
-  return cleared;
+  _groupId: string
+): Promise<{ clearedSettlements: boolean; groupId: string }> {
+  return workerFetchJson<{ clearedSettlements: boolean; groupId: string }>(
+    `/v1/expenses/${encodeURIComponent(expenseId)}`,
+    { method: "DELETE" }
+  );
 }
