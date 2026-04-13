@@ -11,9 +11,13 @@ export class WorkerApiError extends Error {
 }
 
 function workerBase(): string {
-  const base = process.env.WORKER_API_URL?.replace(/\/$/, "");
+  let base = process.env.WORKER_API_URL?.trim().replace(/\/$/, "") ?? "";
   if (!base) {
     throw new Error("WORKER_API_URL is not set");
+  }
+  // Node fetch requires a scheme; Vercel env is sometimes pasted without https://
+  if (!/^https?:\/\//i.test(base)) {
+    base = `https://${base}`;
   }
   return base;
 }
