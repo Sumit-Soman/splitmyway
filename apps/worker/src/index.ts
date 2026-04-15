@@ -36,6 +36,16 @@ app.use("*", async (c, next) => {
   return await mw(c, next);
 });
 
+app.use("*", async (c, next) => {
+  const start = performance.now();
+  await next();
+  const workerMs = performance.now() - start;
+  const existing = c.res.headers.get("Server-Timing");
+  const metric = `worker;dur=${workerMs.toFixed(1)}`;
+  c.header("Server-Timing", existing ? `${existing}, ${metric}` : metric);
+  c.header("Timing-Allow-Origin", "*");
+});
+
 app.get("/health", (c) => c.text("ok"));
 app.route("/v1", v1);
 

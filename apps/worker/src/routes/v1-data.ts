@@ -109,6 +109,14 @@ function blobBindValue(buf: ArrayBuffer | null): Uint8Array | null {
   return new Uint8Array(buf);
 }
 
+function appendServerTiming(response: Response, metrics: Array<{ name: string; durationMs: number }>): Response {
+  if (!metrics.length) return response;
+  const existing = response.headers.get("Server-Timing");
+  const next = metrics.map((m) => `${m.name};dur=${m.durationMs.toFixed(1)}`).join(", ");
+  response.headers.set("Server-Timing", existing ? `${existing}, ${next}` : next);
+  return response;
+}
+
 export function registerDataRoutes(v1: Hono<HonoEnv>) {
   v1.get("/me/memberships", async (c) => {
     const uid = c.get("userId");
@@ -142,8 +150,28 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
     });
   });
 
+  v1.get("/debug/timing", async (c) => {
+    const totalStart = performance.now();
+    const dbStart = performance.now();
+    const probe = await c.env.DB.prepare(`SELECT 1 as ok`).first<{ ok: number }>();
+    const dbMs = performance.now() - dbStart;
+    const serializeStart = performance.now();
+    const response = jsonOk({
+      now: nowIso(),
+      ok: probe?.ok === 1,
+    });
+    const serializeMs = performance.now() - serializeStart;
+    return appendServerTiming(response, [
+      { name: "db", durationMs: dbMs },
+      { name: "serialize", durationMs: serializeMs },
+      { name: "total", durationMs: performance.now() - totalStart },
+    ]);
+  });
+
   v1.get("/dashboard", async (c) => {
+    const totalStart = performance.now();
     const uid = c.get("userId");
+    const dbStart = performance.now();
     const mems = await c.env.DB.prepare(
       `SELECT gm.group_id, gm.role, g.name, g.currency, g.description, g.category
        FROM group_members gm JOIN groups g ON g.id = gm.group_id
@@ -160,93 +188,124 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       }>();
     const groups = mems.results ?? [];
     if (groups.length === 0) {
-      return jsonOk({
+      const response = jsonOk({
         groupsData: [],
       });
+      return appendServerTiming(response, [
+        { name: "db", durationMs: performance.now() - dbStart },
+        { name: "serialize", durationMs: 0 },
+        { name: "total", durationMs: performance.now() - totalStart },
+      ]);
     }
 
-    const groupsData: unknown[] = [];
-    for (const g of groups) {
-      const gid = g.group_id;
-      const memRows = await c.env.DB.prepare(
-        `SELECT gm.user_id, u.name, u.email, u.avatar_mime, u.avatar_blob
-         FROM group_members gm JOIN users u ON u.id = gm.user_id
-         WHERE gm.group_id = ?`
-      )
-        .bind(gid)
-        .all<{ user_id: string; name: string | null; email: string; avatar_mime: string | null; avatar_blob: ArrayBuffer | null }>();
-      const memberIds = (memRows.results ?? []).map((m) => m.user_id);
+    const groupsData = await Promise.all(
+      groups.map(async (g) => {
+        const gid = g.group_id;
+        const [memRows, expRows, shareRows, payRows] = await Promise.all([
+          c.env.DB.prepare(
+            `SELECT gm.user_id, u.name, u.email, u.avatar_mime, u.avatar_blob
+             FROM group_members gm JOIN users u ON u.id = gm.user_id
+             WHERE gm.group_id = ?`
+          )
+            .bind(gid)
+            .all<{
+              user_id: string;
+              name: string | null;
+              email: string;
+              avatar_mime: string | null;
+              avatar_blob: ArrayBuffer | null;
+            }>(),
+          c.env.DB.prepare(
+            `SELECT id, paid_by_user_id, amount_minor, currency FROM expenses WHERE group_id = ?`
+          )
+            .bind(gid)
+            .all<{ id: string; paid_by_user_id: string; amount_minor: number; currency: string }>(),
+          c.env.DB.prepare(
+            `SELECT es.expense_id, es.user_id, es.share_amount_minor
+             FROM expense_shares es
+             INNER JOIN expenses e ON e.id = es.expense_id
+             WHERE e.group_id = ?
+             ORDER BY es.expense_id, es.user_id`
+          )
+            .bind(gid)
+            .all<{ expense_id: string; user_id: string; share_amount_minor: number }>(),
+          c.env.DB.prepare(
+            `SELECT id, from_user_id, to_user_id, amount_minor, currency FROM payments WHERE group_id = ?`
+          )
+            .bind(gid)
+            .all<{ id: string; from_user_id: string; to_user_id: string; amount_minor: number; currency: string }>(),
+        ]);
 
-      const expRows = await c.env.DB.prepare(
-        `SELECT id, paid_by_user_id, amount_minor, currency FROM expenses WHERE group_id = ?`
-      )
-        .bind(gid)
-        .all<{ id: string; paid_by_user_id: string; amount_minor: number; currency: string }>();
+        const sharesByExpense = new Map<string, Array<{ user_id: string; share_amount_minor: number }>>();
+        for (const r of shareRows.results ?? []) {
+          const list = sharesByExpense.get(r.expense_id) ?? [];
+          list.push({ user_id: r.user_id, share_amount_minor: r.share_amount_minor });
+          sharesByExpense.set(r.expense_id, list);
+        }
 
-      const expensesOut: Array<{
-        id: string;
-        paidById: string;
-        amount: string;
-        currency: string;
-        participants: Array<{ userId: string; amount: string }>;
-      }> = [];
-
-      for (const e of expRows.results ?? []) {
-        const parts = await c.env.DB.prepare(
-          `SELECT user_id, share_amount_minor FROM expense_shares WHERE expense_id = ?`
-        )
-          .bind(e.id)
-          .all<{ user_id: string; share_amount_minor: number }>();
-        expensesOut.push({
-          id: e.id,
-          paidById: e.paid_by_user_id,
-          amount: minorToDisplayAmount(e.amount_minor).toFixed(2),
-          currency: e.currency,
-          participants: (parts.results ?? []).map((p) => ({
-            userId: p.user_id,
-            amount: minorToDisplayAmount(p.share_amount_minor).toFixed(2),
-          })),
+        const expensesOut: Array<{
+          id: string;
+          paidById: string;
+          amount: string;
+          currency: string;
+          participants: Array<{ userId: string; amount: string }>;
+        }> = (expRows.results ?? []).map((e) => {
+          const parts = sharesByExpense.get(e.id) ?? [];
+          return {
+            id: e.id,
+            paidById: e.paid_by_user_id,
+            amount: minorToDisplayAmount(e.amount_minor).toFixed(2),
+            currency: e.currency,
+            participants: parts.map((p) => ({
+              userId: p.user_id,
+              amount: minorToDisplayAmount(p.share_amount_minor).toFixed(2),
+            })),
+          };
         });
-      }
 
-      const payRows = await c.env.DB.prepare(
-        `SELECT id, from_user_id, to_user_id, amount_minor, currency FROM payments WHERE group_id = ?`
-      )
-        .bind(gid)
-        .all<{ id: string; from_user_id: string; to_user_id: string; amount_minor: number; currency: string }>();
-
-      groupsData.push({
-        id: gid,
-        name: g.name,
-        description: g.description,
-        category: g.category,
-        currency: g.currency,
-        members: (memRows.results ?? []).map((m) => ({
-          id: m.user_id,
-          userId: m.user_id,
-          user: {
+        return {
+          id: gid,
+          name: g.name,
+          description: g.description,
+          category: g.category,
+          currency: g.currency,
+          members: (memRows.results ?? []).map((m) => ({
             id: m.user_id,
-            name: m.name,
-            email: m.email,
-            avatarUrl: avatarDataUrl(m.avatar_mime, m.avatar_blob),
-          },
-        })),
-        expenses: expensesOut,
-        settlements: (payRows.results ?? []).map((s) => ({
-          id: s.id,
-          fromId: s.from_user_id,
-          toId: s.to_user_id,
-          amount: minorToDisplayAmount(s.amount_minor).toFixed(2),
-          currency: s.currency,
-        })),
-      });
-    }
+            userId: m.user_id,
+            user: {
+              id: m.user_id,
+              name: m.name,
+              email: m.email,
+              avatarUrl: avatarDataUrl(m.avatar_mime, m.avatar_blob),
+            },
+          })),
+          expenses: expensesOut,
+          settlements: (payRows.results ?? []).map((s) => ({
+            id: s.id,
+            fromId: s.from_user_id,
+            toId: s.to_user_id,
+            amount: minorToDisplayAmount(s.amount_minor).toFixed(2),
+            currency: s.currency,
+          })),
+        };
+      })
+    );
 
-    return jsonOk({ groupsData });
+    const dbMs = performance.now() - dbStart;
+    const serializeStart = performance.now();
+    const response = jsonOk({ groupsData });
+    const serializeMs = performance.now() - serializeStart;
+    return appendServerTiming(response, [
+      { name: "db", durationMs: dbMs },
+      { name: "serialize", durationMs: serializeMs },
+      { name: "total", durationMs: performance.now() - totalStart },
+    ]);
   });
 
   v1.get("/groups", async (c) => {
+    const totalStart = performance.now();
     const uid = c.get("userId");
+    const dbStart = performance.now();
     const mems = await c.env.DB.prepare(
       `SELECT gm.group_id, gm.role, g.name, g.description, g.category, g.currency, g.created_at, g.updated_at
        FROM group_members gm JOIN groups g ON g.id = gm.group_id
@@ -264,58 +323,77 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         created_at: string;
         updated_at: string;
       }>();
-    const groups = [];
-    for (const row of mems.results ?? []) {
-      const gid = row.group_id;
-      const memRows = await c.env.DB.prepare(`SELECT user_id FROM group_members WHERE group_id = ?`)
-        .bind(gid)
-        .all<{ user_id: string }>();
-      const memberIds = (memRows.results ?? []).map((m) => m.user_id);
-      const expRows = await c.env.DB.prepare(`SELECT id, paid_by_user_id, amount_minor FROM expenses WHERE group_id = ?`)
-        .bind(gid)
-        .all<{ id: string; paid_by_user_id: string; amount_minor: number }>();
-      const expensesData = [];
-      for (const e of expRows.results ?? []) {
-        const plist = await c.env.DB.prepare(`SELECT user_id, share_amount_minor FROM expense_shares WHERE expense_id = ?`)
-          .bind(e.id)
-          .all<{ user_id: string; share_amount_minor: number }>();
-        expensesData.push({
+    const groups = await Promise.all(
+      (mems.results ?? []).map(async (row) => {
+        const gid = row.group_id;
+        const [memRows, expRows, shareRows, setRows] = await Promise.all([
+          c.env.DB.prepare(`SELECT user_id FROM group_members WHERE group_id = ?`).bind(gid).all<{ user_id: string }>(),
+          c.env.DB
+            .prepare(`SELECT id, paid_by_user_id, amount_minor FROM expenses WHERE group_id = ?`)
+            .bind(gid)
+            .all<{ id: string; paid_by_user_id: string; amount_minor: number }>(),
+          c.env.DB
+            .prepare(
+              `SELECT es.expense_id, es.user_id, es.share_amount_minor
+               FROM expense_shares es
+               INNER JOIN expenses e ON e.id = es.expense_id
+               WHERE e.group_id = ?
+               ORDER BY es.expense_id, es.user_id`
+            )
+            .bind(gid)
+            .all<{ expense_id: string; user_id: string; share_amount_minor: number }>(),
+          c.env.DB
+            .prepare(`SELECT from_user_id, to_user_id, amount_minor FROM payments WHERE group_id = ?`)
+            .bind(gid)
+            .all<{ from_user_id: string; to_user_id: string; amount_minor: number }>(),
+        ]);
+        const memberIds = (memRows.results ?? []).map((m) => m.user_id);
+        const sharesByExpense = new Map<string, Array<{ user_id: string; share_amount_minor: number }>>();
+        for (const r of shareRows.results ?? []) {
+          const list = sharesByExpense.get(r.expense_id) ?? [];
+          list.push({ user_id: r.user_id, share_amount_minor: r.share_amount_minor });
+          sharesByExpense.set(r.expense_id, list);
+        }
+        const expensesData = (expRows.results ?? []).map((e) => ({
           paidById: e.paid_by_user_id,
-          participants: (plist.results ?? []).map((p) => ({
+          participants: (sharesByExpense.get(e.id) ?? []).map((p) => ({
             userId: p.user_id,
             amountMinor: p.share_amount_minor,
           })),
+        }));
+        const balancesMap = calculateBalancesMinor({
+          memberIds,
+          expenses: expensesData,
+          settlements: (setRows.results ?? []).map((s) => ({
+            fromId: s.from_user_id,
+            toId: s.to_user_id,
+            amountMinor: s.amount_minor,
+          })),
         });
-      }
-      const setRows = await c.env.DB.prepare(
-        `SELECT from_user_id, to_user_id, amount_minor FROM payments WHERE group_id = ?`
-      )
-        .bind(gid)
-        .all<{ from_user_id: string; to_user_id: string; amount_minor: number }>();
-      const balancesMap = calculateBalancesMinor({
-        memberIds,
-        expenses: expensesData,
-        settlements: (setRows.results ?? []).map((s) => ({
-          fromId: s.from_user_id,
-          toId: s.to_user_id,
-          amountMinor: s.amount_minor,
-        })),
-      });
-      const rawBal = balancesMap[uid] ?? 0;
-      const yourBalance = minorToDisplayAmount(Math.round(rawBal));
-      groups.push({
-        id: gid,
-        name: row.name,
-        description: row.description,
-        category: row.category,
-        currency: row.currency,
-        role: row.role,
-        memberCount: memberIds.length,
-        expenseCount: expRows.results?.length ?? 0,
-        yourBalance,
-      });
-    }
-    return jsonOk({ groups });
+        const rawBal = balancesMap[uid] ?? 0;
+        const yourBalance = minorToDisplayAmount(Math.round(rawBal));
+        return {
+          id: gid,
+          name: row.name,
+          description: row.description,
+          category: row.category,
+          currency: row.currency,
+          role: row.role,
+          memberCount: memberIds.length,
+          expenseCount: expRows.results?.length ?? 0,
+          yourBalance,
+        };
+      })
+    );
+    const dbMs = performance.now() - dbStart;
+    const serializeStart = performance.now();
+    const response = jsonOk({ groups });
+    const serializeMs = performance.now() - serializeStart;
+    return appendServerTiming(response, [
+      { name: "db", durationMs: dbMs },
+      { name: "serialize", durationMs: serializeMs },
+      { name: "total", durationMs: performance.now() - totalStart },
+    ]);
   });
 
   const createGroupBody = z.object({
@@ -487,6 +565,8 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
   });
 
   v1.get("/groups/:groupId/detail", async (c) => {
+    const totalStart = performance.now();
+    const dbStart = performance.now();
     const uid = c.get("userId");
     const groupId = c.req.param("groupId");
     const m = await assertGroupMember(c.env.DB, uid, groupId);
@@ -501,68 +581,61 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
     }>();
     if (!g) return jsonError(404, "Not found.", "NOT_FOUND");
 
-    const memRows = await c.env.DB.prepare(
-      `SELECT gm.id, gm.user_id, gm.role, u.name, u.email, u.avatar_mime, u.avatar_blob
-       FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?`
-    )
-      .bind(groupId)
-      .all<{
-        id: string;
-        user_id: string;
-        role: string;
-        name: string | null;
-        email: string;
-        avatar_mime: string | null;
-        avatar_blob: ArrayBuffer | null;
-      }>();
-
-    const memberRows = (memRows.results ?? []).map((row) => ({
-      id: row.id,
-      userId: row.user_id,
-      role: row.role,
-      name: row.name,
-      email: row.email,
-      avatarUrl: avatarDataUrl(row.avatar_mime, row.avatar_blob),
-    }));
-    const memberIds = memberRows.map((x) => x.userId);
-
-    const expRows = await c.env.DB.prepare(
-      `SELECT e.*, payer.name as payer_name, payer.email as payer_email, payer.avatar_mime as payer_mime, payer.avatar_blob as payer_blob
-       FROM expenses e
-       JOIN users payer ON payer.id = e.paid_by_user_id
-       WHERE e.group_id = ?
-       ORDER BY e.expense_date DESC`
-    )
-      .bind(groupId)
-      .all<{
-        id: string;
-        paid_by_user_id: string;
-        description: string;
-        amount_minor: number;
-        currency: string;
-        original_amount_minor: number | null;
-        original_currency: string | null;
-        exchange_rate_e8: number | null;
-        category: string;
-        expense_date: string;
-        notes: string | null;
-        split_type: string;
-        attachment_mime: string | null;
-        attachment_blob: ArrayBuffer | null;
-        payer_name: string | null;
-        payer_email: string;
-        payer_mime: string | null;
-        payer_blob: ArrayBuffer | null;
-      }>();
-
-    const expenses = [];
-    for (const e of expRows.results ?? []) {
-      const plist = await c.env.DB.prepare(
-        `SELECT es.*, u.name, u.email, u.avatar_mime, u.avatar_blob
-         FROM expense_shares es JOIN users u ON u.id = es.user_id WHERE es.expense_id = ?`
+    const [memRows, expRows, shareRowsResult, setRows] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT gm.id, gm.user_id, gm.role, u.name, u.email, u.avatar_mime, u.avatar_blob
+         FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?`
       )
-        .bind(e.id)
+        .bind(groupId)
         .all<{
+          id: string;
+          user_id: string;
+          role: string;
+          name: string | null;
+          email: string;
+          avatar_mime: string | null;
+          avatar_blob: ArrayBuffer | null;
+        }>(),
+      c.env.DB.prepare(
+        `SELECT e.*, payer.name as payer_name, payer.email as payer_email, payer.avatar_mime as payer_mime, payer.avatar_blob as payer_blob
+         FROM expenses e
+         JOIN users payer ON payer.id = e.paid_by_user_id
+         WHERE e.group_id = ?
+         ORDER BY e.expense_date DESC`
+      )
+        .bind(groupId)
+        .all<{
+          id: string;
+          paid_by_user_id: string;
+          description: string;
+          amount_minor: number;
+          currency: string;
+          original_amount_minor: number | null;
+          original_currency: string | null;
+          exchange_rate_e8: number | null;
+          category: string;
+          expense_date: string;
+          notes: string | null;
+          split_type: string;
+          attachment_mime: string | null;
+          attachment_blob: ArrayBuffer | null;
+          payer_name: string | null;
+          payer_email: string;
+          payer_mime: string | null;
+          payer_blob: ArrayBuffer | null;
+        }>(),
+      c.env.DB.prepare(
+        `SELECT es.expense_id, es.id, es.user_id, es.share_amount_minor, es.shares, es.percentage_bps,
+                u.name, u.email, u.avatar_mime, u.avatar_blob
+         FROM expense_shares es
+         INNER JOIN expenses e ON e.id = es.expense_id
+         INNER JOIN users u ON u.id = es.user_id
+         WHERE e.group_id = ?
+         ORDER BY es.expense_id, es.id`
+      )
+        .bind(groupId)
+        .all<{
+          expense_id: string;
           id: string;
           user_id: string;
           share_amount_minor: number;
@@ -572,46 +645,8 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           email: string;
           avatar_mime: string | null;
           avatar_blob: ArrayBuffer | null;
-        }>();
-
-      expenses.push({
-        id: e.id,
-        description: e.description,
-        amount: minorToDisplayAmount(e.amount_minor),
-        currency: e.currency,
-        originalAmount:
-          e.original_amount_minor != null ? minorToDisplayAmount(e.original_amount_minor) : null,
-        originalCurrency: e.original_currency,
-        exchangeRate: e.exchange_rate_e8 != null ? e.exchange_rate_e8 / 1e8 : null,
-        category: e.category,
-        date: e.expense_date,
-        notes: e.notes,
-        attachmentFileName: e.attachment_blob && e.attachment_mime ? "attachment" : null,
-        splitMethod: e.split_type,
-        paidById: e.paid_by_user_id,
-        paidBy: {
-          id: e.paid_by_user_id,
-          name: e.payer_name,
-          email: e.payer_email,
-          avatarUrl: avatarDataUrl(e.payer_mime, e.payer_blob),
-        },
-        participants: (plist.results ?? []).map((p) => ({
-          id: p.id,
-          userId: p.user_id,
-          amount: minorToDisplayAmount(p.share_amount_minor),
-          shares: p.shares,
-          percentage: p.percentage_bps != null ? p.percentage_bps / 100 : null,
-          user: {
-            id: p.user_id,
-            name: p.name,
-            email: p.email,
-            avatarUrl: avatarDataUrl(p.avatar_mime, p.avatar_blob),
-          },
-        })),
-      });
-    }
-
-    const setRows = await c.env.DB.prepare(
+        }>(),
+      c.env.DB.prepare(
       `SELECT p.*, fu.name as fn, fu.email as fe, fu.avatar_mime as fm, fu.avatar_blob as fb,
               tu.name as tn, tu.email as te, tu.avatar_mime as tm, tu.avatar_blob as tb
        FROM payments p
@@ -637,7 +672,85 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         te: string;
         tm: string | null;
         tb: ArrayBuffer | null;
-      }>();
+      }>(),
+    ]);
+
+    const memberRows = (memRows.results ?? []).map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      role: row.role,
+      name: row.name,
+      email: row.email,
+      avatarUrl: avatarDataUrl(row.avatar_mime, row.avatar_blob),
+    }));
+    const memberIds = memberRows.map((x) => x.userId);
+
+    type SharePart = {
+      id: string;
+      user_id: string;
+      share_amount_minor: number;
+      shares: number | null;
+      percentage_bps: number | null;
+      name: string | null;
+      email: string;
+      avatar_mime: string | null;
+      avatar_blob: ArrayBuffer | null;
+    };
+    const sharesByExpense = new Map<string, SharePart[]>();
+    for (const r of shareRowsResult.results ?? []) {
+      const list = sharesByExpense.get(r.expense_id) ?? [];
+      list.push({
+        id: r.id,
+        user_id: r.user_id,
+        share_amount_minor: r.share_amount_minor,
+        shares: r.shares,
+        percentage_bps: r.percentage_bps,
+        name: r.name,
+        email: r.email,
+        avatar_mime: r.avatar_mime,
+        avatar_blob: r.avatar_blob,
+      });
+      sharesByExpense.set(r.expense_id, list);
+    }
+
+    const expenses = (expRows.results ?? []).map((e) => {
+      const plist = sharesByExpense.get(e.id) ?? [];
+      return {
+        id: e.id,
+        description: e.description,
+        amount: minorToDisplayAmount(e.amount_minor),
+        currency: e.currency,
+        originalAmount:
+          e.original_amount_minor != null ? minorToDisplayAmount(e.original_amount_minor) : null,
+        originalCurrency: e.original_currency,
+        exchangeRate: e.exchange_rate_e8 != null ? e.exchange_rate_e8 / 1e8 : null,
+        category: e.category,
+        date: e.expense_date,
+        notes: e.notes,
+        attachmentFileName: e.attachment_blob && e.attachment_mime ? "attachment" : null,
+        splitMethod: e.split_type,
+        paidById: e.paid_by_user_id,
+        paidBy: {
+          id: e.paid_by_user_id,
+          name: e.payer_name,
+          email: e.payer_email,
+          avatarUrl: avatarDataUrl(e.payer_mime, e.payer_blob),
+        },
+        participants: plist.map((p) => ({
+          id: p.id,
+          userId: p.user_id,
+          amount: minorToDisplayAmount(p.share_amount_minor),
+          shares: p.shares,
+          percentage: p.percentage_bps != null ? p.percentage_bps / 100 : null,
+          user: {
+            id: p.user_id,
+            name: p.name,
+            email: p.email,
+            avatarUrl: avatarDataUrl(p.avatar_mime, p.avatar_blob),
+          },
+        })),
+      };
+    });
 
     const settlements = (setRows.results ?? []).map((s) => ({
       id: s.id,
@@ -695,7 +808,9 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       .bind(groupId)
       .all<{ id: string; email: string | null; status: string; expires_at: string }>();
 
-    return jsonOk({
+    const dbMs = performance.now() - dbStart;
+    const serializeStart = performance.now();
+    const response = jsonOk({
       detail: {
         role: m.role,
         currentUserId: uid,
@@ -727,6 +842,12 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         settlements,
       },
     });
+    const serializeMs = performance.now() - serializeStart;
+    return appendServerTiming(response, [
+      { name: "db", durationMs: dbMs },
+      { name: "serialize", durationMs: serializeMs },
+      { name: "total", durationMs: performance.now() - totalStart },
+    ]);
   });
 
   const expenseCreateBody = z.object({
@@ -1232,9 +1353,11 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
   });
 
   v1.get("/reports", async (c) => {
+    const totalStart = performance.now();
     const uid = c.get("userId");
     const groupId = c.req.query("groupId");
     const groupIdsCsv = c.req.query("groupIds");
+    const dbStart = performance.now();
     const mems = await c.env.DB.prepare(
       `SELECT gm.group_id, g.name, g.currency FROM group_members gm JOIN groups g ON g.id = gm.group_id WHERE gm.user_id = ?`
     )
@@ -1257,35 +1380,86 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
 
     for (const m of selected) {
       const gid = m.group_id;
-      const memRows = await c.env.DB.prepare(
-        `SELECT gm.user_id, u.name, u.email FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?`
-      )
-        .bind(gid)
-        .all<{ user_id: string; name: string | null; email: string }>();
+      const [memRows, expRows, shareRowsResult, setRows] = await Promise.all([
+        c.env.DB.prepare(
+          `SELECT gm.user_id, u.name, u.email FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?`
+        )
+          .bind(gid)
+          .all<{ user_id: string; name: string | null; email: string }>(),
+        c.env.DB.prepare(
+          `SELECT e.*, payer.name as pname, payer.email as pemail FROM expenses e
+         JOIN users payer ON payer.id = e.paid_by_user_id WHERE e.group_id = ? ORDER BY e.expense_date ASC`
+        )
+          .bind(gid)
+          .all<{
+            id: string;
+            paid_by_user_id: string;
+            description: string;
+            amount_minor: number;
+            currency: string;
+            original_amount_minor: number | null;
+            original_currency: string | null;
+            exchange_rate_e8: number | null;
+            category: string;
+            expense_date: string;
+            split_type: string;
+            pname: string | null;
+            pemail: string;
+          }>(),
+        c.env.DB.prepare(
+          `SELECT es.expense_id, es.user_id, es.share_amount_minor, u.name, u.email FROM expense_shares es
+           INNER JOIN expenses e ON e.id = es.expense_id
+           INNER JOIN users u ON u.id = es.user_id
+           WHERE e.group_id = ?
+           ORDER BY es.expense_id, es.user_id`
+        )
+          .bind(gid)
+          .all<{
+            expense_id: string;
+            user_id: string;
+            share_amount_minor: number;
+            name: string | null;
+            email: string;
+          }>(),
+        c.env.DB.prepare(
+          `SELECT p.id, p.from_user_id, p.to_user_id, p.amount_minor, p.paid_at, p.notes,
+                fu.name as fn, fu.email as fe, tu.name as tn, tu.email as te FROM payments p
+         JOIN users fu ON fu.id = p.from_user_id JOIN users tu ON tu.id = p.to_user_id
+         WHERE p.group_id = ? ORDER BY p.paid_at DESC`
+        )
+          .bind(gid)
+          .all<{
+            id: string;
+            from_user_id: string;
+            to_user_id: string;
+            amount_minor: number;
+            paid_at: string;
+            notes: string | null;
+            fn: string | null;
+            fe: string;
+            tn: string | null;
+            te: string;
+          }>(),
+      ]);
+
       const memberByUserId = new Map<string, { name: string | null; email: string }>(
         (memRows.results ?? []).map((r) => [r.user_id, { name: r.name, email: r.email }])
       );
 
-      const expRows = await c.env.DB.prepare(
-        `SELECT e.*, payer.name as pname, payer.email as pemail FROM expenses e
-         JOIN users payer ON payer.id = e.paid_by_user_id WHERE e.group_id = ? ORDER BY e.expense_date ASC`
-      )
-        .bind(gid)
-        .all<{
-          id: string;
-          paid_by_user_id: string;
-          description: string;
-          amount_minor: number;
-          currency: string;
-          original_amount_minor: number | null;
-          original_currency: string | null;
-          exchange_rate_e8: number | null;
-          category: string;
-          expense_date: string;
-          split_type: string;
-          pname: string | null;
-          pemail: string;
-        }>();
+      const sharesByExpense = new Map<
+        string,
+        Array<{ user_id: string; share_amount_minor: number; name: string | null; email: string }>
+      >();
+      for (const r of shareRowsResult.results ?? []) {
+        const list = sharesByExpense.get(r.expense_id) ?? [];
+        list.push({
+          user_id: r.user_id,
+          share_amount_minor: r.share_amount_minor,
+          name: r.name,
+          email: r.email,
+        });
+        sharesByExpense.set(r.expense_id, list);
+      }
 
       const expensesOut: Array<{
         id: string;
@@ -1308,13 +1482,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       }> = [];
 
       for (const e of expRows.results ?? []) {
-        const plist = await c.env.DB.prepare(
-          `SELECT es.user_id, es.share_amount_minor, u.name, u.email FROM expense_shares es
-           JOIN users u ON u.id = es.user_id WHERE es.expense_id = ?`
-        )
-          .bind(e.id)
-          .all<{ user_id: string; share_amount_minor: number; name: string | null; email: string }>();
-        const parts = plist.results ?? [];
+        const parts = sharesByExpense.get(e.id) ?? [];
         expensesOut.push({
           id: e.id,
           description: e.description,
@@ -1349,26 +1517,6 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       }
 
       for (const r of memRows.results ?? []) people.add(r.user_id);
-
-      const setRows = await c.env.DB.prepare(
-        `SELECT p.id, p.from_user_id, p.to_user_id, p.amount_minor, p.paid_at, p.notes,
-                fu.name as fn, fu.email as fe, tu.name as tn, tu.email as te FROM payments p
-         JOIN users fu ON fu.id = p.from_user_id JOIN users tu ON tu.id = p.to_user_id
-         WHERE p.group_id = ? ORDER BY p.paid_at DESC`
-      )
-        .bind(gid)
-        .all<{
-          id: string;
-          from_user_id: string;
-          to_user_id: string;
-          amount_minor: number;
-          paid_at: string;
-          notes: string | null;
-          fn: string | null;
-          fe: string;
-          tn: string | null;
-          te: string;
-        }>();
 
       const memberIds = (memRows.results ?? []).map((x) => x.user_id);
       const settlementsForBalance = (setRows.results ?? []).map((s) => ({
@@ -1428,7 +1576,9 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       });
     }
 
-    return jsonOk({
+    const dbMs = performance.now() - dbStart;
+    const serializeStart = performance.now();
+    const response = jsonOk({
       groups: groupPicker,
       sections,
       summary: {
@@ -1438,5 +1588,11 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         peopleCount: people.size,
       },
     });
+    const serializeMs = performance.now() - serializeStart;
+    return appendServerTiming(response, [
+      { name: "db", durationMs: dbMs },
+      { name: "serialize", durationMs: serializeMs },
+      { name: "total", durationMs: performance.now() - totalStart },
+    ]);
   });
 }
