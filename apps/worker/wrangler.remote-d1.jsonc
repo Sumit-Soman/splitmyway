@@ -1,0 +1,20 @@
+// Opt-in: local workerd + production D1 (same database_id as deploy).
+// Use: npm run dev:remote-d1  (from apps/worker) or npm run worker:dev:remote-d1 (repo root).
+// Do not use wrangler deploy with this file; deploy still uses wrangler.jsonc.
+{
+  "name": "splitmyway-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "splitmyway",
+      "database_id": "e3b94bb3-4292-492d-87b4-b3d2a6aebf75",
+      "migrations_dir": "migrations",
+      "remote": true
+    }
+  ],
+  "vars": {
+    "CORS_ORIGINS": "http://localhost:3000,http://127.0.0.1:3000"
+  }
+}

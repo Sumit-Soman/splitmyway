@@ -59,7 +59,7 @@ Copy `.env.example` to `.env` for local development.
 
    Default: `http://127.0.0.1:8787`.
 
-   **Use the same D1 database as production (advanced):** you need a logged-in Wrangler session (`npx wrangler login`). Then run `npm run worker:dev:remote` from the repo root (or `npm run dev:remote` in `apps/worker`). That starts an edge dev session with **remote** bindings, so the Worker talks to the real D1 named in `wrangler.jsonc` (`database_id`). **Every write hits production data.** Use the **same `JWT_SECRET` / `WORKER_JWT_SECRET` as production** in `apps/worker/.dev.vars` and your Next `.env.local`, or session verification will fail after login.
+   **Use the same D1 database as production (advanced):** see [Local Next.js with **production** D1](#local-nextjs-with-production-d1-real-data) below. Do **not** rely on `npm run worker:dev` for that — it uses a separate local database.
 
 5. **Run Next.js** (new terminal, repo root):
 
@@ -77,6 +77,35 @@ Copy `.env.example` to `.env` for local development.
    Use the **same** string as `JWT_SECRET` in `apps/worker/wrangler.jsonc` for local dev.
 
 6. **Create a user** via `/signup` or insert SQL / migration from PocketBase.
+
+### Local Next.js with **production** D1 (real data)
+
+All reads/writes go to the **live** database (`database_id` in `apps/worker/wrangler.jsonc`). Use a separate browser profile or stay careful: you are not on a sandbox.
+
+**Important:** `npm run worker:dev` uses **local** D1 only. You will see the wrong users/groups even if login “works” (e.g. a local test account). For production rows, use the commands below.
+
+1. **Cloudflare CLI:** `npx wrangler login` (account that owns the Worker + D1).
+2. **Production JWT** in `apps/worker/.dev.vars` — set `JWT_SECRET` to the same string as Vercel **WORKER_JWT_SECRET** and Cloudflare **JWT_SECRET** for this Worker (`wrangler secret`). Do not commit this file (it is gitignored).
+3. **Sync + API (production D1)** — one command from repo root:
+
+   ```bash
+   npm run local:prod:worker
+   ```
+
+   This updates `.env.local` from `apps/worker/.dev.vars`, checks JWT alignment, then starts the Worker on **http://127.0.0.1:8787** with **remote** D1 (`wrangler.remote-d1.jsonc`). Requires **`npx wrangler login`**.
+
+   (To only refresh `.env.local` without starting the Worker: `npm run local:prod:sync-env`.)
+
+4. **Optional — full edge preview** (`wrangler dev --remote`): `npm run worker:dev:remote`
+5. **Next.js** (second terminal):
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000) and sign in with your **production** account.
+
+For **local-only** D1 and no risk to prod data, use `npm run worker:dev` instead of `local:prod:worker`.
 
 ## PocketBase → D1 migration
 
@@ -142,8 +171,11 @@ Connect the GitHub repo; build command `npm run build`, output Next.js defaults.
 
 | Script | Description |
 |--------|-------------|
-| `npm run worker:dev` | Wrangler dev for `apps/worker` (local D1) |
-| `npm run worker:dev:remote` | Wrangler dev against **remote** D1 (production DB) |
+| `npm run worker:dev` | Wrangler dev for `apps/worker` (**local** D1 only) |
+| `npm run worker:dev:remote-d1` | Local worker + **remote** D1 (`wrangler.remote-d1.jsonc`) |
+| `npm run worker:dev:remote` | Dev Worker on Cloudflare edge + remote resources |
+| `npm run local:prod:sync-env` | Write `.env.local` `WORKER_*` from `apps/worker/.dev.vars` |
+| `npm run local:prod:worker` | Sync `.env.local` from `.dev.vars`, verify JWT, start Worker (**prod D1**) |
 | `npm run worker:deploy` | `wrangler deploy` for Worker |
 | `npm run migrate:pb-to-d1` | PocketBase → SQL export |
 | `npm run pb:serve` | _(Legacy)_ local PocketBase |

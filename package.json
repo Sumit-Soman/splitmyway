@@ -19,7 +19,10 @@
     "pb:serve": "bash scripts/ensure-pocketbase.sh && ./tools/pocketbase serve --http=127.0.0.1:8090 --dir=./pb_data --migrationsDir=./pb_migrations",
     "pb:migrate": "bash scripts/ensure-pocketbase.sh && ./tools/pocketbase migrate up --dir=./pb_data --migrationsDir=./pb_migrations",
     "worker:dev": "npm run dev -w @splitmyway/worker",
+    "worker:dev:remote-d1": "npm run dev:remote-d1 -w @splitmyway/worker",
     "worker:dev:remote": "npm run dev:remote -w @splitmyway/worker",
+    "local:prod:sync-env": "bash scripts/sync-local-prod-next-env.sh",
+    "local:prod:worker": "bash scripts/sync-local-prod-next-env.sh && bash scripts/check-local-prod-jwt.sh && npm run worker:dev:remote-d1",
     "worker:deploy": "npm run deploy -w @splitmyway/worker",
     "migrate:pb-to-d1": "tsx --env-file=.env scripts/migrate-pocketbase-to-d1.ts"
   },

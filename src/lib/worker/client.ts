@@ -81,6 +81,18 @@ function logWorkerFetchTiming(path: string, startedAt: number, res: Response): v
 
 type WorkerEnvelope<T> = { ok: true; data: T } | { ok: false; error: string; code?: string };
 
+/** Prefer `Authorization` already on `headers` (e.g. fresh token right after login); otherwise use cookie. */
+function applyBearerFromCookie(
+  headers: Headers,
+  cookieStore: Awaited<ReturnType<typeof cookies>>
+): void {
+  if (headers.has("Authorization")) return;
+  const token = cookieStore.get("smw_token")?.value;
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+}
+
 function parseWorkerResponseJson(text: string, status: number): unknown {
   try {
     return text ? JSON.parse(text) : null;
@@ -95,11 +107,8 @@ function parseWorkerResponseJson(text: string, status: number): unknown {
 
 export async function workerFetchRaw(path: string, init?: RequestInit): Promise<Response> {
   const cookieStore = await cookies();
-  const token = cookieStore.get("smw_token")?.value;
   const headers = new Headers(init?.headers);
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  applyBearerFromCookie(headers, cookieStore);
   const startedAt = performance.now();
   const res = await fetch(workerAbsoluteUrl(path), {
     ...init,
@@ -112,11 +121,8 @@ export async function workerFetchRaw(path: string, init?: RequestInit): Promise<
 
 export async function workerFetchJson<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const cookieStore = await cookies();
-  const token = cookieStore.get("smw_token")?.value;
   const headers = new Headers(init?.headers);
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  applyBearerFromCookie(headers, cookieStore);
   if (init?.json !== undefined) {
     headers.set("Content-Type", "application/json");
   }
@@ -163,11 +169,8 @@ export async function workerPostPublicJson<T>(path: string, json: unknown): Prom
 
 export async function workerFetchForm(path: string, formData: FormData, method: "POST" | "PATCH" = "POST") {
   const cookieStore = await cookies();
-  const token = cookieStore.get("smw_token")?.value;
   const headers = new Headers();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  applyBearerFromCookie(headers, cookieStore);
   const startedAt = performance.now();
   const res = await fetch(workerAbsoluteUrl(path), {
     method,

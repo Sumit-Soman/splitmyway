@@ -112,7 +112,10 @@ export function GroupDetailClient({
     amount: string;
   } | null>(null);
   const [splitMethod, setSplitMethod] = useState<"equal" | "exact" | "percentage" | "shares">("equal");
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(members.map((m) => m.userId)));
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const others = members.filter((m) => m.userId !== currentUserId).map((m) => m.userId);
+    return new Set(others);
+  });
   const [expenseCurrency, setExpenseCurrency] = useState(group.currency);
   const [ratePreview, setRatePreview] = useState<{ rate: number; converted: number } | null>(null);
   const [amountStr, setAmountStr] = useState("");
@@ -132,7 +135,7 @@ export function GroupDetailClient({
   const [editShareMap, setEditShareMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    setSelected(new Set(members.map((m) => m.userId)));
+    setSelected(new Set(members.filter((m) => m.userId !== currentUserId).map((m) => m.userId)));
   }, [members]);
 
   /** Switching groups must not keep the previous group's add form state (same client component instance). */
@@ -156,7 +159,7 @@ export function GroupDetailClient({
       setPctMap({});
       setShareMap({});
       setRatePreview(null);
-      setSelected(new Set(members.map((m) => m.userId)));
+      setSelected(new Set(members.filter((m) => m.userId !== currentUserId).map((m) => m.userId)));
     }
     prevAddOpenRef.current = addOpen;
   }, [addOpen, group.currency, members]);
@@ -224,7 +227,11 @@ export function GroupDetailClient({
     };
   }, [amountNum, expenseCurrency, group.currency]);
 
-  const participantIds = useMemo(() => Array.from(selected), [selected]);
+  const participantIds = useMemo(() => {
+    const s = new Set(selected);
+    s.add(currentUserId);
+    return Array.from(s);
+  }, [selected, currentUserId]);
 
   const previewSplit = useMemo(() => {
     const total =

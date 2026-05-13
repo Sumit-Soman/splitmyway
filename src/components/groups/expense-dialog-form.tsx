@@ -1,6 +1,7 @@
 "use client";
 
 import type { Dispatch, SetStateAction } from "react";
+import { useMemo } from "react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -91,7 +92,23 @@ export function ExpenseDialogForm({
   pending: boolean;
 }) {
   const { toast } = useToast();
-  const participantIds = Array.from(selected);
+  /** Create: others in `selected`, you always included. Edit: full participant set from expense. */
+  const participantIds = useMemo(() => {
+    if (expenseId) return Array.from(selected);
+    return Array.from(new Set([...selected, currentUserId]));
+  }, [expenseId, selected, currentUserId]);
+
+  const otherMembers = useMemo(
+    () => members.filter((m) => m.userId !== currentUserId),
+    [members, currentUserId]
+  );
+
+  const labelForUserId = (userId: string) =>
+    userId === currentUserId
+      ? "You"
+      : (members.find((x) => x.userId === userId)?.name ??
+        members.find((x) => x.userId === userId)?.email ??
+        userId);
 
   return (
     <div key={formKey} className="space-y-4">
@@ -244,7 +261,7 @@ export function ExpenseDialogForm({
       <div className="space-y-2">
         <Label>Participants</Label>
         <div className="grid gap-2">
-          {members.map((m) => (
+          {otherMembers.map((m) => (
             <label key={m.userId} className="flex items-center gap-2 text-sm text-neutral-700">
               <input
                 type="checkbox"
@@ -274,7 +291,7 @@ export function ExpenseDialogForm({
             <div key={id} className="flex items-center gap-2">
               <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
                 <MemberDot userId={id} />
-                {members.find((x) => x.userId === id)?.name ?? id}
+                {labelForUserId(id)}
               </span>
               <Input
                 type="number"
@@ -303,7 +320,7 @@ export function ExpenseDialogForm({
             <div key={id} className="flex items-center gap-2">
               <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
                 <MemberDot userId={id} />
-                {members.find((x) => x.userId === id)?.name ?? id}
+                {labelForUserId(id)}
               </span>
               <Input
                 type="number"
@@ -332,7 +349,7 @@ export function ExpenseDialogForm({
             <div key={id} className="flex items-center gap-2">
               <span className="flex w-36 min-w-0 items-center gap-1.5 truncate text-xs text-neutral-600">
                 <MemberDot userId={id} />
-                {members.find((x) => x.userId === id)?.name ?? id}
+                {labelForUserId(id)}
               </span>
               <Input
                 type="number"
@@ -364,7 +381,7 @@ export function ExpenseDialogForm({
                 <span className="flex min-w-0 items-center gap-1.5">
                   <MemberDot userId={uid} />
                   <MemberName userId={uid} className="truncate font-medium">
-                    {members.find((x) => x.userId === uid)?.name ?? uid}
+                    {labelForUserId(uid)}
                   </MemberName>
                 </span>
                 <span className="tabular-nums text-neutral-900">{formatCurrency(amt, groupCurrency)}</span>

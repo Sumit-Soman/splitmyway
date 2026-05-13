@@ -39,7 +39,7 @@ export async function login(
       password: parsed.data.password.trim(),
     });
     await setSessionToken(data.token);
-    await ensureAppUserForAuth({ id: data.user.id });
+    await ensureAppUserForAuth({ id: data.user.id }, data.token);
   } catch (e) {
     unstable_rethrow(e);
     if (e instanceof WorkerApiError) {
@@ -82,7 +82,7 @@ export async function signup(
       password: parsed.data.password,
     });
     await setSessionToken(data.token);
-    await ensureAppUserForAuth({ id: data.user.id });
+    await ensureAppUserForAuth({ id: data.user.id }, data.token);
   } catch (e) {
     unstable_rethrow(e);
     if (e instanceof WorkerApiError) {
