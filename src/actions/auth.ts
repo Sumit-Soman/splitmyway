@@ -50,7 +50,8 @@ export async function login(
   }
 
   const next = String(formData.get("next") ?? "") || "/dashboard";
-  redirect(next.startsWith("/") ? next : "/dashboard");
+  const target = next.startsWith("/") ? next : "/dashboard";
+  return { success: true, redirectTo: target };
 }
 
 export async function signup(
@@ -92,7 +93,7 @@ export async function signup(
     return { success: false, error: err.message ?? "Could not create account." };
   }
 
-  redirect("/dashboard");
+  return { success: true, redirectTo: "/dashboard" };
 }
 
 export async function logout(): Promise<void> {

@@ -18,6 +18,10 @@ export default function SignupPage() {
   );
 
   useEffect(() => {
+    if (state?.success && state.redirectTo) {
+      window.location.assign(state.redirectTo);
+      return;
+    }
     if (state && !state.success) {
       toast({ title: "Could not create account", description: state.error, variant: "destructive" });
     }
