@@ -1,2 +1,3 @@
-# Copy to `.dev.vars` (gitignored). Must match repo root `.env` → `WORKER_JWT_SECRET`.
+# Copy to `.dev.vars` (gitignored). Must match Next.js `WORKER_JWT_SECRET` (e.g. in `.env.local`).
+# For `npm run dev:remote`, use the same value as production (`wrangler secret put JWT_SECRET`).
 JWT_SECRET=change-me-in-production-use-wrangler-secret

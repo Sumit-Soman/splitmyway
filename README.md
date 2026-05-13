@@ -59,6 +59,8 @@ Copy `.env.example` to `.env` for local development.
 
    Default: `http://127.0.0.1:8787`.
 
+   **Use the same D1 database as production (advanced):** you need a logged-in Wrangler session (`npx wrangler login`). Then run `npm run worker:dev:remote` from the repo root (or `npm run dev:remote` in `apps/worker`). That starts an edge dev session with **remote** bindings, so the Worker talks to the real D1 named in `wrangler.jsonc` (`database_id`). **Every write hits production data.** Use the **same `JWT_SECRET` / `WORKER_JWT_SECRET` as production** in `apps/worker/.dev.vars` and your Next `.env.local`, or session verification will fail after login.
+
 5. **Run Next.js** (new terminal, repo root):
 
    ```bash
@@ -140,7 +142,8 @@ Connect the GitHub repo; build command `npm run build`, output Next.js defaults.
 
 | Script | Description |
 |--------|-------------|
-| `npm run worker:dev` | Wrangler dev for `apps/worker` |
+| `npm run worker:dev` | Wrangler dev for `apps/worker` (local D1) |
+| `npm run worker:dev:remote` | Wrangler dev against **remote** D1 (production DB) |
 | `npm run worker:deploy` | `wrangler deploy` for Worker |
 | `npm run migrate:pb-to-d1` | PocketBase → SQL export |
 | `npm run pb:serve` | _(Legacy)_ local PocketBase |
