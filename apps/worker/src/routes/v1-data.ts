@@ -39,18 +39,6 @@ async function parseJsonSafe<T>(req: Request, schema: z.ZodType<T>): Promise<
   return { ok: true, data: parsed.data };
 }
 
-function avatarDataUrl(mime: string | null, blob: ArrayBuffer | null): string | null {
-  if (!mime || !blob || blob.byteLength === 0) return null;
-  if (blob.byteLength > 512 * 1024) return null;
-  const bytes = new Uint8Array(blob);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return `data:${mime};base64,${btoa(binary)}`;
-}
-
 async function logActivity(
   db: D1Database,
   userId: string,
@@ -203,7 +191,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         const gid = g.group_id;
         const [memRows, expRows, shareRows, payRows] = await Promise.all([
           c.env.DB.prepare(
-            `SELECT gm.user_id, u.name, u.email, u.avatar_mime, u.avatar_blob
+            `SELECT gm.user_id, u.name, u.email
              FROM group_members gm JOIN users u ON u.id = gm.user_id
              WHERE gm.group_id = ?`
           )
@@ -212,8 +200,6 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
               user_id: string;
               name: string | null;
               email: string;
-              avatar_mime: string | null;
-              avatar_blob: ArrayBuffer | null;
             }>(),
           c.env.DB.prepare(
             `SELECT id, paid_by_user_id, amount_minor, currency FROM expenses WHERE group_id = ?`
@@ -276,7 +262,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
               id: m.user_id,
               name: m.name,
               email: m.email,
-              avatarUrl: avatarDataUrl(m.avatar_mime, m.avatar_blob),
+              avatarUrl: null,
             },
           })),
           expenses: expensesOut,
@@ -480,11 +466,11 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
     const memberSet = new Set((existing.results ?? []).map((r) => r.user_id));
     const like = `%${q.replace(/%/g, "\\%")}%`;
     const rows = await c.env.DB.prepare(
-      `SELECT id, name, email, avatar_mime, avatar_blob FROM users
+      `SELECT id, name, email FROM users
        WHERE id != ? AND (lower(email) LIKE ? OR lower(coalesce(name,'')) LIKE ?) LIMIT 24`
     )
       .bind(uid, like, like)
-      .all<{ id: string; name: string | null; email: string; avatar_mime: string | null; avatar_blob: ArrayBuffer | null }>();
+      .all<{ id: string; name: string | null; email: string }>();
     const hits = (rows.results ?? [])
       .filter((r) => !memberSet.has(r.id))
       .slice(0, 12)
@@ -492,7 +478,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         id: r.id,
         name: r.name,
         email: r.email,
-        avatarUrl: avatarDataUrl(r.avatar_mime, r.avatar_blob),
+        avatarUrl: null,
       }));
     return jsonOk({ hits });
   });
@@ -583,7 +569,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
 
     const [memRows, expRows, shareRowsResult, setRows] = await Promise.all([
       c.env.DB.prepare(
-        `SELECT gm.id, gm.user_id, gm.role, u.name, u.email, u.avatar_mime, u.avatar_blob
+        `SELECT gm.id, gm.user_id, gm.role, u.name, u.email
          FROM group_members gm JOIN users u ON u.id = gm.user_id WHERE gm.group_id = ?`
       )
         .bind(groupId)
@@ -593,14 +579,12 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           role: string;
           name: string | null;
           email: string;
-          avatar_mime: string | null;
-          avatar_blob: ArrayBuffer | null;
         }>(),
       c.env.DB.prepare(
         `SELECT e.id, e.paid_by_user_id, e.description, e.amount_minor, e.currency,
                 e.original_amount_minor, e.original_currency, e.exchange_rate_e8,
                 e.category, e.expense_date, e.notes, e.split_type, e.attachment_mime,
-                payer.name as payer_name, payer.email as payer_email, payer.avatar_mime as payer_mime, payer.avatar_blob as payer_blob
+                payer.name as payer_name, payer.email as payer_email
          FROM expenses e
          JOIN users payer ON payer.id = e.paid_by_user_id
          WHERE e.group_id = ?
@@ -623,12 +607,10 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           attachment_mime: string | null;
           payer_name: string | null;
           payer_email: string;
-          payer_mime: string | null;
-          payer_blob: ArrayBuffer | null;
         }>(),
       c.env.DB.prepare(
         `SELECT es.expense_id, es.id, es.user_id, es.share_amount_minor, es.shares, es.percentage_bps,
-                u.name, u.email, u.avatar_mime, u.avatar_blob
+                u.name, u.email
          FROM expense_shares es
          INNER JOIN expenses e ON e.id = es.expense_id
          INNER JOIN users u ON u.id = es.user_id
@@ -645,36 +627,30 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           percentage_bps: number | null;
           name: string | null;
           email: string;
-          avatar_mime: string | null;
-          avatar_blob: ArrayBuffer | null;
         }>(),
       c.env.DB.prepare(
-      `SELECT p.*, fu.name as fn, fu.email as fe, fu.avatar_mime as fm, fu.avatar_blob as fb,
-              tu.name as tn, tu.email as te, tu.avatar_mime as tm, tu.avatar_blob as tb
-       FROM payments p
-       JOIN users fu ON fu.id = p.from_user_id
-       JOIN users tu ON tu.id = p.to_user_id
-       WHERE p.group_id = ?
-       ORDER BY p.paid_at DESC`
-    )
-      .bind(groupId)
-      .all<{
-        id: string;
-        from_user_id: string;
-        to_user_id: string;
-        amount_minor: number;
-        currency: string;
-        notes: string | null;
-        paid_at: string;
-        fn: string | null;
-        fe: string;
-        fm: string | null;
-        fb: ArrayBuffer | null;
-        tn: string | null;
-        te: string;
-        tm: string | null;
-        tb: ArrayBuffer | null;
-      }>(),
+        `SELECT p.id, p.from_user_id, p.to_user_id, p.amount_minor, p.currency, p.notes, p.paid_at,
+                fu.name as fn, fu.email as fe, tu.name as tn, tu.email as te
+         FROM payments p
+         JOIN users fu ON fu.id = p.from_user_id
+         JOIN users tu ON tu.id = p.to_user_id
+         WHERE p.group_id = ?
+         ORDER BY p.paid_at DESC`
+      )
+        .bind(groupId)
+        .all<{
+          id: string;
+          from_user_id: string;
+          to_user_id: string;
+          amount_minor: number;
+          currency: string;
+          notes: string | null;
+          paid_at: string;
+          fn: string | null;
+          fe: string;
+          tn: string | null;
+          te: string;
+        }>(),
     ]);
 
     const memberRows = (memRows.results ?? []).map((row) => ({
@@ -683,7 +659,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       role: row.role,
       name: row.name,
       email: row.email,
-      avatarUrl: avatarDataUrl(row.avatar_mime, row.avatar_blob),
+      avatarUrl: null,
     }));
     const memberIds = memberRows.map((x) => x.userId);
 
@@ -695,8 +671,6 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       percentage_bps: number | null;
       name: string | null;
       email: string;
-      avatar_mime: string | null;
-      avatar_blob: ArrayBuffer | null;
     };
     const sharesByExpense = new Map<string, SharePart[]>();
     for (const r of shareRowsResult.results ?? []) {
@@ -709,8 +683,6 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         percentage_bps: r.percentage_bps,
         name: r.name,
         email: r.email,
-        avatar_mime: r.avatar_mime,
-        avatar_blob: r.avatar_blob,
       });
       sharesByExpense.set(r.expense_id, list);
     }
@@ -736,7 +708,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           id: e.paid_by_user_id,
           name: e.payer_name,
           email: e.payer_email,
-          avatarUrl: avatarDataUrl(e.payer_mime, e.payer_blob),
+          avatarUrl: null,
         },
         participants: plist.map((p) => ({
           id: p.id,
@@ -748,7 +720,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
             id: p.user_id,
             name: p.name,
             email: p.email,
-            avatarUrl: avatarDataUrl(p.avatar_mime, p.avatar_blob),
+            avatarUrl: null,
           },
         })),
       };
@@ -765,12 +737,12 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       from: {
         name: s.fn,
         email: s.fe,
-        avatarUrl: avatarDataUrl(s.fm, s.fb),
+        avatarUrl: null,
       },
       to: {
         name: s.tn,
         email: s.te,
-        avatarUrl: avatarDataUrl(s.tm, s.tb),
+        avatarUrl: null,
       },
     }));
 
