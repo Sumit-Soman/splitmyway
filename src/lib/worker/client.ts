@@ -27,7 +27,11 @@ function readWorkerApiUrlRaw(): string {
 function workerOrigin(): string {
   let s = readWorkerApiUrlRaw().replace(/\/+$/, "");
   if (!s) {
-    throw new Error("WORKER_API_URL is not set");
+    const onVercel = process.env["VERCEL"] === "1";
+    const hint = onVercel
+      ? " In Vercel: Project → Settings → Environment Variables → add WORKER_API_URL (your Worker origin, no trailing slash) and WORKER_JWT_SECRET. Scope at least Production; enable Preview too if you use preview URLs. Redeploy."
+      : "";
+    throw new Error(`WORKER_API_URL is not set.${hint}`);
   }
   if (!/^https?:\/\//i.test(s)) {
     s = `https://${s}`;
