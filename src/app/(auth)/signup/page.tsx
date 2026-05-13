@@ -19,7 +19,7 @@ export default function SignupPage() {
 
   useEffect(() => {
     if (state?.success && state.redirectTo) {
-      window.location.assign(state.redirectTo);
+      window.location.replace(state.redirectTo);
       return;
     }
     if (state && !state.success) {
@@ -69,7 +69,7 @@ export default function SignupPage() {
         </form>
         <p className="mt-4 text-center text-sm text-neutral-600">
           Already have an account?{" "}
-          <Link href="/login" className="font-medium text-neutral-900 underline-offset-4 hover:underline">
+          <Link href="/login" prefetch={false} className="font-medium text-neutral-900 underline-offset-4 hover:underline">
             Log in
           </Link>
         </p>

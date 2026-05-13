@@ -1,7 +1,16 @@
 import * as jose from "jose";
 
+function readWorkerJwtSecret(): string {
+  const v = process.env["WORKER_JWT_SECRET"];
+  if (typeof v !== "string") return "";
+  return v
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim();
+}
+
 export async function verifySessionToken(token: string): Promise<{ sub: string; email: string } | null> {
-  const secret = process.env.WORKER_JWT_SECRET;
+  const secret = readWorkerJwtSecret();
   if (!secret) return null;
   try {
     const { payload } = await jose.jwtVerify(token, new TextEncoder().encode(secret), {

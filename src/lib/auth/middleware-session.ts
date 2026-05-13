@@ -17,7 +17,19 @@ export async function updateSessionGate(request: NextRequest) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.searchParams.set("next", path);
-    return NextResponse.redirect(redirectUrl);
+    const res = NextResponse.redirect(redirectUrl);
+    if (token) {
+      res.cookies.set({
+        name: "smw_token",
+        value: "",
+        path: "/",
+        maxAge: 0,
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+      });
+    }
+    return res;
   }
 
   if (isAuthRoute && record) {
@@ -26,5 +38,5 @@ export async function updateSessionGate(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  return NextResponse.next({ request });
+  return NextResponse.next();
 }

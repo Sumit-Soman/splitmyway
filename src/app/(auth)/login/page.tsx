@@ -21,7 +21,7 @@ function LoginForm() {
 
   useEffect(() => {
     if (state?.success && state.redirectTo) {
-      window.location.assign(state.redirectTo);
+      window.location.replace(state.redirectTo);
       return;
     }
     if (state && !state.success) {
@@ -57,13 +57,13 @@ function LoginForm() {
           </Button>
         </form>
         <p className="mt-4 text-center text-sm text-neutral-600">
-          <Link href="/forgot-password" className="font-medium text-neutral-900 underline-offset-4 hover:underline">
+          <Link href="/forgot-password" prefetch={false} className="font-medium text-neutral-900 underline-offset-4 hover:underline">
             Forgot password?
           </Link>
         </p>
         <p className="mt-2 text-center text-sm text-neutral-600">
           No account?{" "}
-          <Link href="/signup" className="font-medium text-neutral-900 underline-offset-4 hover:underline">
+          <Link href="/signup" prefetch={false} className="font-medium text-neutral-900 underline-offset-4 hover:underline">
             Sign up
           </Link>
         </p>
