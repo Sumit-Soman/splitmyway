@@ -49,9 +49,12 @@ export async function login(
     return { success: false, error: err.message ?? "Sign in failed." };
   }
 
-  const next = String(formData.get("next") ?? "") || "/dashboard";
-  const target = next.startsWith("/") ? next : "/dashboard";
-  return { success: true, redirectTo: target };
+  const rawNext = String(formData.get("next") ?? "").trim() || "/dashboard";
+  const target =
+    rawNext.startsWith("/") && !rawNext.startsWith("//") && !rawNext.includes("\0")
+      ? rawNext
+      : "/dashboard";
+  redirect(target);
 }
 
 export async function signup(
@@ -93,7 +96,7 @@ export async function signup(
     return { success: false, error: err.message ?? "Could not create account." };
   }
 
-  return { success: true, redirectTo: "/dashboard" };
+  redirect("/dashboard");
 }
 
 export async function logout(): Promise<void> {

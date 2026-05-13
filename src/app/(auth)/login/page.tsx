@@ -20,10 +20,6 @@ function LoginForm() {
   const [state, action, pending] = useActionState(login, null as ActionResult | null);
 
   useEffect(() => {
-    if (state?.success && state.redirectTo) {
-      window.location.replace(state.redirectTo);
-      return;
-    }
     if (state && !state.success) {
       toast({ title: "Sign in failed", description: state.error, variant: "destructive" });
     }

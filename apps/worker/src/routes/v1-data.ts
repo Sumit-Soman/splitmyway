@@ -1164,18 +1164,25 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       .first<{
         group_id: string;
         attachment_mime: string | null;
-        attachment_blob: ArrayBuffer | null;
+        attachment_blob: ArrayBuffer | ArrayBufferView | null;
       }>();
-    if (!exp || !exp.attachment_blob || !exp.attachment_mime) {
+    const rawBlob = exp?.attachment_blob ?? null;
+    const bytes =
+      rawBlob instanceof ArrayBuffer
+        ? new Uint8Array(rawBlob)
+        : rawBlob != null && ArrayBuffer.isView(rawBlob)
+          ? new Uint8Array(rawBlob.buffer, rawBlob.byteOffset, rawBlob.byteLength)
+          : null;
+    if (!exp || !exp.attachment_mime || !bytes || bytes.byteLength === 0) {
       return new Response("Not found", { status: 404 });
     }
     const mem = await assertGroupMember(c.env.DB, uid, exp.group_id);
     if (!mem) return new Response("Forbidden", { status: 403 });
-    return new Response(exp.attachment_blob, {
+    return new Response(bytes, {
       status: 200,
       headers: {
         "content-type": exp.attachment_mime,
-        "cache-control": "private, max-age=3600",
+        "cache-control": "private, no-store",
       },
     });
   });
