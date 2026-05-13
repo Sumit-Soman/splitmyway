@@ -597,7 +597,10 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           avatar_blob: ArrayBuffer | null;
         }>(),
       c.env.DB.prepare(
-        `SELECT e.*, payer.name as payer_name, payer.email as payer_email, payer.avatar_mime as payer_mime, payer.avatar_blob as payer_blob
+        `SELECT e.id, e.paid_by_user_id, e.description, e.amount_minor, e.currency,
+                e.original_amount_minor, e.original_currency, e.exchange_rate_e8,
+                e.category, e.expense_date, e.notes, e.split_type, e.attachment_mime,
+                payer.name as payer_name, payer.email as payer_email, payer.avatar_mime as payer_mime, payer.avatar_blob as payer_blob
          FROM expenses e
          JOIN users payer ON payer.id = e.paid_by_user_id
          WHERE e.group_id = ?
@@ -618,7 +621,6 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           notes: string | null;
           split_type: string;
           attachment_mime: string | null;
-          attachment_blob: ArrayBuffer | null;
           payer_name: string | null;
           payer_email: string;
           payer_mime: string | null;
@@ -727,7 +729,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         category: e.category,
         date: e.expense_date,
         notes: e.notes,
-        attachmentFileName: e.attachment_blob && e.attachment_mime ? "attachment" : null,
+        attachmentFileName: e.attachment_mime ? "attachment" : null,
         splitMethod: e.split_type,
         paidById: e.paid_by_user_id,
         paidBy: {
@@ -1387,8 +1389,14 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
           .bind(gid)
           .all<{ user_id: string; name: string | null; email: string }>(),
         c.env.DB.prepare(
-          `SELECT e.*, payer.name as pname, payer.email as pemail FROM expenses e
-         JOIN users payer ON payer.id = e.paid_by_user_id WHERE e.group_id = ? ORDER BY e.expense_date ASC`
+          `SELECT e.id, e.paid_by_user_id, e.description, e.amount_minor, e.currency,
+                  e.original_amount_minor, e.original_currency, e.exchange_rate_e8,
+                  e.category, e.expense_date, e.split_type,
+                  payer.name as pname, payer.email as pemail
+           FROM expenses e
+           JOIN users payer ON payer.id = e.paid_by_user_id
+           WHERE e.group_id = ?
+           ORDER BY e.expense_date ASC`
         )
           .bind(gid)
           .all<{
