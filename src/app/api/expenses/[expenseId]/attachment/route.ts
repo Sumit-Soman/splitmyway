@@ -21,7 +21,10 @@ export async function GET(
   }
 
   const { expenseId } = await context.params;
-  const upstream = await workerFetchRaw(`/v1/expenses/${encodeURIComponent(expenseId)}/attachment`);
+  /** Avoid opaque compressed / chunked edge cases Node→Worker for binary bodies. */
+  const upstream = await workerFetchRaw(`/v1/expenses/${encodeURIComponent(expenseId)}/attachment`, {
+    headers: { "Accept-Encoding": "identity" },
+  });
 
   if (upstream.status === 401) {
     return new NextResponse("Unauthorized", { status: 401 });
@@ -38,9 +41,16 @@ export async function GET(
   }
 
   const buf = await upstream.arrayBuffer();
+  if (buf.byteLength === 0) {
+    return new NextResponse("Empty attachment", { status: 502 });
+  }
+
   const headers = new Headers();
-  const ct = upstream.headers.get("content-type");
-  if (ct) headers.set("content-type", ct);
+  const ct = (upstream.headers.get("content-type") ?? "application/octet-stream").split(";")[0]!.trim();
+  headers.set("content-type", ct || "application/octet-stream");
+  if (/^image\//i.test(ct) || /^application\/pdf$/i.test(ct)) {
+    headers.set("content-disposition", "inline");
+  }
   headers.set("cache-control", "private, no-store");
 
   return new NextResponse(buf, { status: 200, headers });

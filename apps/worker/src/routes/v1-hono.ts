@@ -6,6 +6,7 @@ import { jsonError, jsonOk } from "../lib/errors";
 import { signUserToken, verifyUserToken } from "../lib/jwt";
 import { genRecordId, nowIso } from "../lib/ids";
 import { registerDataRoutes } from "./v1-data";
+import { d1BlobToUint8Array } from "../lib/d1-blob";
 
 const loginBody = z.object({
   email: z.string().email().transform((s) => s.trim().toLowerCase()),
@@ -35,10 +36,10 @@ async function parseJsonSafe<T>(req: Request, schema: z.ZodType<T>): Promise<
   return { ok: true, data: parsed.data };
 }
 
-function avatarDataUrl(mime: string | null, blob: ArrayBuffer | null): string | null {
-  if (!mime || !blob || blob.byteLength === 0) return null;
-  if (blob.byteLength > 512 * 1024) return null;
-  const bytes = new Uint8Array(blob);
+function avatarDataUrl(mime: string | null, blob: unknown): string | null {
+  const bytes = d1BlobToUint8Array(blob);
+  if (!mime || !bytes || bytes.byteLength === 0) return null;
+  if (bytes.byteLength > 512 * 1024) return null;
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
@@ -218,10 +219,11 @@ v1.post("/me/avatar", async (c) => {
     return jsonError(400, "Expected multipart/form-data.", "BAD_REQUEST");
   }
   const form = await c.req.formData();
-  const file = form.get("avatar");
-  if (!(file instanceof File) || file.size === 0) {
+  const fileUnknown: unknown = form.get("avatar");
+  if (!(fileUnknown instanceof Blob) || fileUnknown.size === 0) {
     return jsonError(400, "Missing avatar file.", "BAD_REQUEST");
   }
+  const file = fileUnknown;
   if (file.size > 2 * 1024 * 1024) {
     return jsonError(400, "Image must be 2 MB or smaller.", "BAD_REQUEST");
   }

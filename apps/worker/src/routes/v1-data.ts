@@ -14,6 +14,7 @@ import {
   MAX_EXPENSE_ATTACHMENT_ERROR,
   MAX_GROUP_DETAIL_FIELD_CHARS,
 } from "../lib/limits";
+import { d1BlobToUint8Array } from "../lib/d1-blob";
 
 const ACTIVITY_TYPES = {
   EXPENSE_ADDED: "expense_added",
@@ -1164,16 +1165,11 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       .first<{
         group_id: string;
         attachment_mime: string | null;
-        attachment_blob: ArrayBuffer | ArrayBufferView | null;
+        attachment_blob: unknown;
       }>();
-    const rawBlob = exp?.attachment_blob ?? null;
-    const bytes =
-      rawBlob instanceof ArrayBuffer
-        ? new Uint8Array(rawBlob)
-        : rawBlob != null && ArrayBuffer.isView(rawBlob)
-          ? new Uint8Array(rawBlob.buffer, rawBlob.byteOffset, rawBlob.byteLength)
-          : null;
-    if (!exp || !exp.attachment_mime || !bytes || bytes.byteLength === 0) {
+    const bytes = d1BlobToUint8Array(exp?.attachment_blob);
+    const mimeRaw = (exp?.attachment_mime ?? "").trim();
+    if (!exp || !mimeRaw || !bytes || bytes.byteLength === 0) {
       return new Response("Not found", { status: 404 });
     }
     const mem = await assertGroupMember(c.env.DB, uid, exp.group_id);
@@ -1181,7 +1177,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
     return new Response(bytes, {
       status: 200,
       headers: {
-        "content-type": exp.attachment_mime,
+        "content-type": mimeRaw,
         "cache-control": "private, no-store",
       },
     });
