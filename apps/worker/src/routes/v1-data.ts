@@ -9,7 +9,11 @@ import {
   minimizeDebtsMinor,
   minorToDisplayAmount,
 } from "../services/balances-minor";
-import { MAX_EXPENSE_ATTACHMENT_BYTES, MAX_EXPENSE_ATTACHMENT_ERROR } from "../lib/limits";
+import {
+  MAX_EXPENSE_ATTACHMENT_BYTES,
+  MAX_EXPENSE_ATTACHMENT_ERROR,
+  MAX_GROUP_DETAIL_FIELD_CHARS,
+} from "../lib/limits";
 
 const ACTIVITY_TYPES = {
   EXPENSE_ADDED: "expense_added",
@@ -103,6 +107,12 @@ function appendServerTiming(response: Response, metrics: Array<{ name: string; d
   const next = metrics.map((m) => `${m.name};dur=${m.durationMs.toFixed(1)}`).join(", ");
   response.headers.set("Server-Timing", existing ? `${existing}, ${next}` : next);
   return response;
+}
+
+function truncateForGroupDetail(s: string | null): string | null {
+  if (s == null) return s;
+  if (s.length <= MAX_GROUP_DETAIL_FIELD_CHARS) return s;
+  return s.slice(0, MAX_GROUP_DETAIL_FIELD_CHARS);
 }
 
 export function registerDataRoutes(v1: Hono<HonoEnv>) {
@@ -691,7 +701,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       const plist = sharesByExpense.get(e.id) ?? [];
       return {
         id: e.id,
-        description: e.description,
+        description: truncateForGroupDetail(e.description) ?? e.description,
         amount: minorToDisplayAmount(e.amount_minor),
         currency: e.currency,
         originalAmount:
@@ -700,7 +710,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
         exchangeRate: e.exchange_rate_e8 != null ? e.exchange_rate_e8 / 1e8 : null,
         category: e.category,
         date: e.expense_date,
-        notes: e.notes,
+        notes: truncateForGroupDetail(e.notes),
         attachmentFileName: e.attachment_mime ? "attachment" : null,
         splitMethod: e.split_type,
         paidById: e.paid_by_user_id,
@@ -732,7 +742,7 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
       toId: s.to_user_id,
       amount: minorToDisplayAmount(s.amount_minor),
       currency: s.currency,
-      notes: s.notes,
+      notes: truncateForGroupDetail(s.notes),
       settledAt: s.paid_at,
       from: {
         name: s.fn,
@@ -748,17 +758,17 @@ export function registerDataRoutes(v1: Hono<HonoEnv>) {
 
     const balancesMap = calculateBalancesMinor({
       memberIds,
-      expenses: expenses.map((e) => ({
-        paidById: e.paidById,
-        participants: e.participants.map((p) => ({
-          userId: p.userId,
-          amountMinor: Math.round(p.amount * 100),
+      expenses: (expRows.results ?? []).map((e) => ({
+        paidById: e.paid_by_user_id,
+        participants: (sharesByExpense.get(e.id) ?? []).map((p) => ({
+          userId: p.user_id,
+          amountMinor: p.share_amount_minor,
         })),
       })),
-      settlements: settlements.map((s) => ({
-        fromId: s.fromId,
-        toId: s.toId,
-        amountMinor: Math.round(s.amount * 100),
+      settlements: (setRows.results ?? []).map((s) => ({
+        fromId: s.from_user_id,
+        toId: s.to_user_id,
+        amountMinor: s.amount_minor,
       })),
     });
 

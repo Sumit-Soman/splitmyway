@@ -42,9 +42,10 @@ export function calculateBalancesMinor(params: {
 }
 
 export function minimizeDebtsMinor(balances: Record<string, number>): MinimizedTransactionMinor[] {
+  /** Integer minor units only — avoids float dust from display→minor round-trips hanging the greedy loop. */
   const entries = Object.entries(balances).map(([userId, balance]) => ({
     userId,
-    balance,
+    balance: Math.round(balance),
   }));
 
   const creditors = entries.filter((e) => e.balance > 0).sort((a, b) => b.balance - a.balance);

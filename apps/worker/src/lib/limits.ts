@@ -9,3 +9,6 @@ export const MAX_EXPENSE_ATTACHMENT_BYTES = Math.floor(1.5 * 1024 * 1024);
 /** User-visible validation (matches Next.js `MAX_EXPENSE_ATTACHMENT_LABEL`). */
 export const MAX_EXPENSE_ATTACHMENT_ERROR =
   "Receipt must be 1.5 MB or smaller (database storage limit). Use a smaller file or leave attachment empty.";
+
+/** Cap text fields in group detail JSON so responses stay bounded (notes/description). */
+export const MAX_GROUP_DETAIL_FIELD_CHARS = 8192;
